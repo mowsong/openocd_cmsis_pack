@@ -48,7 +48,7 @@ CC_WARN := -Wall -Wextra -Wno-unused-variable -Wno-unused-function -Wno-unused-b
 # Code generation options
 ##############################################################################################################################
 CMN_CODEGEN := -ffunction-sections -fdata-sections -fsingle-precision-constant -ffast-math -fmerge-all-constants \
-			   -fstrict-overflow -fno-math-errno -fvisibility=hidden -frename-registers -fpeel-loops -fsection-anchors
+			   -fstrict-overflow -fno-math-errno -fvisibility=hidden -frename-registers -fpeel-loops -fsection-anchors -ffreestanding
 
 CC_CODEGEN  := $(CMN_CODEGEN)
 

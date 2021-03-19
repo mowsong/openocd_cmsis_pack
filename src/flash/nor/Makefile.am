@@ -55,6 +55,7 @@ NOR_DRIVERS = \
 	%D%/ocl.c \
 	%D%/pic32mx.c \
 	%D%/psoc4.c \
+	%D%/psoc4hv.c \
 	%D%/psoc5lp.c \
 	%D%/sfdp.c \
 	%D%/renesas_rpchf.c \

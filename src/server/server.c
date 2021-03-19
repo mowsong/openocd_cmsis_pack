@@ -766,6 +766,19 @@ COMMAND_HANDLER(handle_shutdown_command)
 	return ERROR_COMMAND_CLOSE_CONNECTION;
 }
 
+
+COMMAND_HANDLER(handle_terminate_command)
+{
+	extern struct command_context *global_cmd_ctx;
+	extern void openocd_cleanup(struct command_context *cmd_ctx);
+
+	LOG_USER("terminate command invoked");
+	server_quit();
+	openocd_cleanup(global_cmd_ctx);
+	exit(0);
+	return ERROR_COMMAND_CLOSE_CONNECTION;
+}
+
 COMMAND_HANDLER(handle_poll_period_command)
 {
 	if (CMD_ARGC == 0)
@@ -816,6 +829,13 @@ static const struct command_registration server_command_handlers[] = {
 		.usage = "[name]",
 		.help = "Specify address by name on which to listen for "
 			"incoming TCP/IP connections",
+	},
+	{
+		.name = "terminate",
+		.handler = &handle_terminate_command,
+		.mode = COMMAND_ANY,
+		.usage = "",
+		.help = "Terminates the openocd process",
 	},
 	COMMAND_REGISTRATION_DONE
 };

@@ -41,7 +41,7 @@ struct FlashDevice const FlashDevice  =  {
    {{ 0x00040000, 0x000000, }, /* Set Sector size */
    { SECTOR_END }}
 };
-#elif defined (tviic2d6m) &&  defined (SEMPER_FLASH)
+#elif (defined (tviic2d6m) || defined(tviic2d4m)) &&  defined (SEMPER_FLASH)
 __attribute__((used))
 struct FlashDevice const FlashDevice  =  {
    FLASH_DRV_VERS,             /* Driver Version, do not modify! */
@@ -107,6 +107,22 @@ struct FlashDevice const FlashDevice  =  {
    { SECTOR_END }}
 };
 
+#elif defined(tviic2d4m) &&  defined (SEMPER_SPI_FLASH)
+__attribute__((used))
+struct FlashDevice const FlashDevice  =  {
+        FLASH_DRV_VERS,             /* Driver Version, do not modify! */
+        "TraveoII SemperSPIFlash",  /* Device Name */
+        ONCHIP,                     /* Device Type */
+        0x80000000,                 /* Device Start Address */
+        0x08000000,                 /* Device Size in Bytes (512kB) */
+        256,                        /* Programming Page Size */
+        0,                          /* Reserved, must be 0 */
+        0xFF,                       /* Initial Content of Erased Memory */
+        1000,                       /* Program Page Timeout 1000 mSec */
+        120000,                     /* Erase Sector Timeout 4000 mSec */
+        {{ 0x00040000, 0x000000, }, /* Set Sector size */
+         { SECTOR_END }}
+};
 #elif defined (HYPER_RAM)
 // Nothing to include
 #else

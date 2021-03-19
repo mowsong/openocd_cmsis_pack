@@ -8,7 +8,7 @@ OBJDUMP=$(CROSS_COMPILE)objdump
 
 CFLAGS =	-c -mthumb -mcpu=cortex-m0plus -Os \
 			-Wall -Wextra -Wpedantic \
-			-fpic -mpic-data-is-text-relative
+			-fpic -mpic-data-is-text-relative -ffreestanding
 
 all: psoc4_legacy_write.inc psoc4_current_write.inc
 

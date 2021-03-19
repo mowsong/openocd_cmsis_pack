@@ -58,7 +58,7 @@ static int unregister_command(struct command_context *context,
 	struct command *parent, const char *name);
 static char *command_name(struct command *c, char delim);
 
-static void tcl_output(void *privData, const char *file, unsigned line,
+static void tcl_output(void *privData, enum log_levels level, const char *file, unsigned line,
 	const char *function, const char *string)
 {
 	struct log_capture_state *state = privData;

@@ -1004,9 +1004,12 @@ static void cmsis_dap_swd_read_process(struct cmsis_dap *dap, int timeout_ms)
 		goto skip;
 	}
 
-	if (block->transfer_count != buffer[1])
-		LOG_ERROR("CMSIS-DAP transfer count mismatch: expected %d, got %d",
+	if (block->transfer_count != buffer[1]) {
+		LOG_ERROR("CMSIS-DAP transfer count mismatch: expected %d, got %d, his is fatal",
 			  block->transfer_count, buffer[1]);
+
+		exit(-1);
+	}
 
 	LOG_DEBUG_IO("Received results of %d queued transactions FIFO index %d", buffer[1], pending_fifo_get_idx);
 	size_t idx = 3;

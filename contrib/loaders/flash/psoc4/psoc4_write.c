@@ -85,8 +85,13 @@ static uint32_t program_row(uint32_t src, uint32_t row_id, uint32_t macro_idx, u
 {
 	uint32_t sromapi_buf[2 + (row_size >> 2)];
 
+	/* Flash controller index, applicable for PSoC4HV, can be 0 or 1 */
+	bool flash_ctrl_idx = !!(row_id & FLASH_CONTROLLER_BIT_MASH);
+	bool is_sflash_bank = !!(row_id & SUPERVISORY_FLASH_BIT_BASK);
+	row_id &= ~(FLASH_CONTROLLER_BIT_MASH | SUPERVISORY_FLASH_BIT_BASK);
+
 	sromapi_buf[0] = PSOC4_SROM_KEY1 | ((PSOC4_SROM_KEY2 + PSOC4_CMD_LOAD_LATCH) << 8) |
-		(macro_idx << 24);
+		(macro_idx << 24) | (flash_ctrl_idx << 31);
 	sromapi_buf[1] = row_size - 1;
 	memcpy32(&sromapi_buf[2], (uint32_t *)src, row_size >> 2);
 
@@ -96,12 +101,8 @@ static uint32_t program_row(uint32_t src, uint32_t row_id, uint32_t macro_idx, u
 	if (status)
 		return status;
 
-	uint32_t srom_req = is_erased((uint32_t *)(row_id * row_size), row_size >> 2) ?
-				PSOC4_CMD_PROGRAM_ROW : PSOC4_CMD_WRITE_ROW;
-
-	if(row_id & 0x80000000) {
-		row_id &= ~0x80000000;
-		srom_req = PSOC4_CMD_WRITE_SFLASH_ROW;
+	if(is_sflash_bank) {
+		uint32_t srom_req = PSOC4_CMD_WRITE_SFLASH_ROW;
 
 		sromapi_buf[0] = PSOC4_SROM_KEY1 | ((PSOC4_SROM_KEY2 + srom_req) << 8);
 		sromapi_buf[1] = row_id;
@@ -112,8 +113,11 @@ static uint32_t program_row(uint32_t src, uint32_t row_id, uint32_t macro_idx, u
 			return status;
 
 	} else {
+		uint32_t srom_req = is_erased((uint32_t *)(row_id * row_size), row_size >> 2) ?
+					PSOC4_CMD_PROGRAM_ROW : PSOC4_CMD_WRITE_ROW;
+
 		sromapi_buf[0] = PSOC4_SROM_KEY1 | ((PSOC4_SROM_KEY2 + srom_req) << 8) |
-				(row_id << 16);
+				(row_id << 16) | (flash_ctrl_idx << 31);
 		write_io(PSOC4_CPUSS_SYSARG, sromapi_buf);
 		write_io(PSOC4_CPUSS_SYSREQ, PSOC4_SROM_SYSREQ_BIT | srom_req);
 		status = poll_sromapi();
@@ -132,7 +136,7 @@ static uint32_t program_row(uint32_t src, uint32_t row_id, uint32_t macro_idx, u
  * @param rows_per_macro number of rows per flash macro
  ***************************************************************************************/
 __attribute__((flatten, noreturn))
-void write(volatile struct ping_pong_buffer *buf, uint32_t row_idx,
+void psoc4_write(volatile struct ping_pong_buffer *buf, uint32_t row_idx,
 			  const uint32_t row_size, uint32_t const rows_per_macro)
 {
 	/* rows_per_macro can be 256 or 512 only, translate it to 8 or 9 */

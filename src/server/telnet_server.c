@@ -96,16 +96,22 @@ static int telnet_output(struct command_context *cmd_ctx, const char *line)
 	return telnet_outputline(connection, line);
 }
 
-static void telnet_log_callback(void *priv, const char *file, unsigned line,
+static void telnet_log_callback(void *priv, enum log_levels level, const char *file, unsigned line,
 	const char *function, const char *string)
 {
+	extern int telnet_add_prefix;
+	extern const char * const log_strings[6];
+
 	struct connection *connection = priv;
 	struct telnet_connection *t_con = connection->priv;
 	size_t i;
 	size_t tmp;
 
+	const char * const prefix = (level > LOG_LVL_USER) ? log_strings[level + 1] : "";
 	/* If the prompt is not visible, simply output the message. */
 	if (!t_con->prompt_visible) {
+		if(telnet_add_prefix)
+			telnet_outputline(connection, prefix);
 		telnet_outputline(connection, string);
 		return;
 	}
@@ -123,6 +129,9 @@ static void telnet_log_callback(void *priv, const char *file, unsigned line,
 	for (i = 0; i < tmp; i += 16)
 		telnet_write(connection, "\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b",
 			MIN(tmp - i, 16));
+
+	if(telnet_add_prefix)
+		telnet_outputline(connection, prefix);
 
 	telnet_outputline(connection, string);
 

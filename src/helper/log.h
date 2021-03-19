@@ -84,7 +84,7 @@ void busy_sleep(uint64_t ms);
 
 void log_socket_error(const char *socket_desc);
 
-typedef void (*log_callback_fn)(void *priv, const char *file, unsigned line,
+typedef void (*log_callback_fn)(void *priv, enum log_levels level, const char *file, unsigned line,
 		const char *function, const char *string);
 
 struct log_callback {

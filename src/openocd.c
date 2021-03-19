@@ -322,6 +322,29 @@ static int openocd_thread(int argc, char *argv[], struct command_context *cmd_ct
 	return ERROR_OK;
 }
 
+void openocd_cleanup(struct command_context *cmd_ctx)
+{
+	flash_free_all_banks();
+	gdb_service_free();
+	server_free();
+
+
+	/* free all DAP and CTI objects */
+	dap_cleanup_all();
+	arm_cti_cleanup_all();
+
+	unregister_all_commands(cmd_ctx, NULL);
+
+	adapter_quit();
+
+	server_host_os_close();
+
+	/* Shutdown commandline interface */
+	command_exit(cmd_ctx);
+
+	free_config();
+}
+
 /* normally this is the main() function entry, but if OpenOCD is linked
  * into application, then this fn will not be invoked, but rather that
  * application will have it's own implementation of main(). */
@@ -352,24 +375,7 @@ int openocd_main(int argc, char *argv[])
 	/* Start the executable meat that can evolve into thread in future. */
 	ret = openocd_thread(argc, argv, cmd_ctx);
 
-	flash_free_all_banks();
-	gdb_service_free();
-	server_free();
-
-	unregister_all_commands(cmd_ctx, NULL);
-
-	/* free all DAP and CTI objects */
-	dap_cleanup_all();
-	arm_cti_cleanup_all();
-
-	adapter_quit();
-
-	server_host_os_close();
-
-	/* Shutdown commandline interface */
-	command_exit(cmd_ctx);
-
-	free_config();
+	openocd_cleanup(cmd_ctx);
 
 	if (ERROR_FAIL == ret)
 		return EXIT_FAILURE;

@@ -50,7 +50,7 @@ static int64_t current_time;
 
 static int64_t start;
 
-static const char * const log_strings[6] = {
+const char * const log_strings[6] = {
 	"User : ",
 	"Error: ",
 	"Warn : ",	/* want a space after each colon, all same width, colons aligned */
@@ -62,14 +62,14 @@ static const char * const log_strings[6] = {
 static int count;
 
 /* forward the log to the listeners */
-static void log_forward(const char *file, unsigned line, const char *function, const char *string)
+static void log_forward(enum log_levels level, const char *file, unsigned line, const char *function, const char *string)
 {
 	struct log_callback *cb, *next;
 	cb = log_callbacks;
 	/* DANGER!!!! the log callback can remove itself!!!! */
 	while (cb) {
 		next = cb->next;
-		cb->fn(cb->priv, file, line, function, string);
+		cb->fn(cb->priv, level, file, line, function, string);
 		cb = next;
 	}
 }
@@ -150,7 +150,7 @@ static void log_puts(enum log_levels level,
 
 	/* Never forward LOG_LVL_DEBUG, too verbose and they can be found in the log if need be */
 	if (level <= LOG_LVL_INFO)
-		log_forward(file, line, function, string);
+		log_forward(level, file, line, function, string);
 }
 
 void log_printf(enum log_levels level,

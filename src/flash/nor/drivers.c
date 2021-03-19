@@ -65,6 +65,7 @@ extern const struct flash_driver ocl_flash;
 extern const struct flash_driver pic32mx_flash;
 extern const struct flash_driver psoc4_flash;
 extern const struct flash_driver psoc4_flash_prot;
+extern const struct flash_driver psoc4hv_flash;
 extern const struct flash_driver psoc5lp_flash;
 extern const struct flash_driver psoc5lp_eeprom_flash;
 extern const struct flash_driver psoc5lp_nvl_flash;
@@ -148,6 +149,7 @@ static const struct flash_driver * const flash_drivers[] = {
 	&pic32mx_flash,
 	&psoc4_flash,
 	&psoc4_flash_prot,
+	&psoc4hv_flash,
 	&psoc5lp_flash,
 	&psoc5lp_eeprom_flash,
 	&psoc5lp_nvl_flash,

@@ -83,8 +83,7 @@ struct kp3_version {
 static struct kp3_version g_kp3_latest_ver;
 static struct acquire_config acquire_config;
 static struct power_config power_config;
-static bool voltage_changed;
-static uint16_t initial_voltage;
+static uint16_t initial_voltage = UINT16_MAX;
 
 /** ***********************************************************************************************
  * @brief Compares KitProg3 versions represented by kp3_version structure
@@ -269,30 +268,23 @@ static int kitprog3_power_control(void)
 		return ERROR_FAIL;
 	}
 
-	uint16_t target_voltage = 0;
-
-	if (power_config.enabled) {
-		/* Get current voltage, used for dropout detection */
-		int hr = kitprog3_get_power(&target_voltage);
-		if(hr != ERROR_OK)
-			return hr;
-	}
-
 	struct cmsis_dap *dap = cmsis_dap_handle;
 	dap->packet_buffer[0] = 0;
 	dap->packet_buffer[1] = KP3_REQUEST_POWER;
 	dap->packet_buffer[2] = KP3_REQUEST_POWER_SET;
 	if (power_config.enabled) {
-		/* Report dropout if voltage has changed by more than 5% */
-		const int max_error  = KP3_TARGET_VOLTAGE_MAX_ERROR_PC * power_config.voltage / 100;
-		if(abs(target_voltage - power_config.voltage) > max_error)
-			voltage_changed = true;
-
-		LOG_INFO("kitprog3: powering up target device using KitProg3 (VTarg = %d mV)",
-			power_config.voltage);
-		dap->packet_buffer[3] = power_config.voltage ? 0x02 : 0x00;
-		dap->packet_buffer[4] = power_config.voltage & 0xFF;
-		dap->packet_buffer[5] = power_config.voltage >> 8;
+		if (power_config.voltage == UINT16_MAX) {
+			LOG_INFO("kitprog3: powering up target device using KitProg3 (default voltage)");
+			dap->packet_buffer[3] = 0x01;
+			dap->packet_buffer[4] = 0;
+			dap->packet_buffer[5] = 0;
+		} else {
+			LOG_INFO("kitprog3: powering up target device using KitProg3 (VTarg = %d mV)",
+				power_config.voltage);
+			dap->packet_buffer[3] = power_config.voltage ? 0x02 : 0x00;
+			dap->packet_buffer[4] = power_config.voltage & 0xFF;
+			dap->packet_buffer[5] = power_config.voltage >> 8;
+		}
 	} else {
 		LOG_INFO("kitprog3: powering down target device using KitProg3");
 		dap->packet_buffer[3] = 0x00;
@@ -304,27 +296,31 @@ static int kitprog3_power_control(void)
 	if (hr != ERROR_OK)
 		LOG_ERROR("kitprog3: power_control command failed (target already powered?)");
 
-	if(power_config.enabled && power_config.voltage) {
+	if (power_config.enabled) {
+		/* Get current voltage, used for dropout detection */
+		hr = kitprog3_get_power(&initial_voltage);
+		if(hr != ERROR_OK)
+			return hr;
+
 		/* Wait up to KP3_USB_TIMEOUT for target voltage to stabilise */
 		int64_t start = timeval_ms();
-		const int max_error  = KP3_TARGET_VOLTAGE_MAX_ERROR_PC * power_config.voltage / 100;
-
 		while(timeval_ms() - start <= KP3_USB_TIMEOUT) {
-			alive_sleep(10);
-
-			hr = kitprog3_get_power(&target_voltage);
+			uint16_t mv_now;
+			hr = kitprog3_get_power(&mv_now);
 			if(hr != ERROR_OK)
 				return hr;
 
-			if(abs(target_voltage - power_config.voltage) <= max_error)
+			const int max_error  = KP3_TARGET_VOLTAGE_MAX_ERROR_PC * mv_now / 100;
+			if(abs(initial_voltage - mv_now) <= max_error)
 				break;
+
+			initial_voltage = mv_now;
 		}
 
 		if(timeval_ms() - start > KP3_USB_TIMEOUT)
-			LOG_WARNING("Target voltage (%u.%03u V) is not within %d%% of requested %u.%03u V",
-						target_voltage / 1000, target_voltage % 1000,
-						KP3_TARGET_VOLTAGE_MAX_ERROR_PC,
-						power_config.voltage / 1000, power_config.voltage % 1000);
+			LOG_WARNING("Target voltage (%u.%03u V) is not stable within %d%%",
+						initial_voltage / 1000, initial_voltage % 1000,
+						KP3_TARGET_VOLTAGE_MAX_ERROR_PC);
 	}
 
 	return hr;
@@ -342,7 +338,8 @@ static int kitprog3_acquire_psoc(void)
 		goto error;
 	}
 
-	LOG_INFO("kitprog3: acquiring the device...");
+	LOG_INFO("kitprog3: acquiring the device (mode: %s)...",
+			 acquire_config.acquire_mode ? "power-cycle" : "reset");
 
 	struct cmsis_dap *dap = cmsis_dap_handle;
 	int hr = kitprog3_led_control(KP3_LED_STATE_PROGRAMMING);
@@ -516,9 +513,10 @@ static int kitprog3_init(void)
 			return hr;
 	}
 
-	hr = kitprog3_get_power(&initial_voltage);
+	uint16_t voltage = 0;
+	hr = kitprog3_get_power(&voltage);
 	if (hr == ERROR_OK)
-		LOG_INFO("VTarget = %u.%03u V", initial_voltage / 1000, initial_voltage % 1000);
+		LOG_INFO("VTarget = %u.%03u V", voltage / 1000, voltage % 1000);
 
 	if (acquire_config.configured)
 		kitprog3_acquire_psoc();
@@ -584,19 +582,16 @@ COMMAND_HANDLER(cmsis_dap_handle_acquire_config_command)
 
 COMMAND_HANDLER(cmsis_dap_handle_power_config_command)
 {
-	if (CMD_ARGC  == 0)
+	if (CMD_ARGC < 1 || CMD_ARGC > 2)
 		return ERROR_COMMAND_ARGUMENT_INVALID;
 
 	bool enabled = false;
-	uint16_t voltage = 0;
+	uint16_t voltage = UINT16_MAX;
 
 	COMMAND_PARSE_ON_OFF(CMD_ARGV[0], enabled);
 
-	if (enabled) {
-		if (CMD_ARGC != 2)
-			return ERROR_COMMAND_ARGUMENT_INVALID;
+	if (CMD_ARGC == 2)
 		COMMAND_PARSE_NUMBER(u16, CMD_ARGV[1], voltage);
-	}
 
 	power_config.configured = true;
 	power_config.enabled = enabled;
@@ -713,7 +708,7 @@ static const struct command_registration kitprog3_subcommand_handlers[] = {
 		.name = "acquire_config",
 		.handler = &cmsis_dap_handle_acquire_config_command,
 		.mode = COMMAND_CONFIG,
-		.usage = "<enabled on|off> <target_type (0:PSoC4, 1:PSoC5-LP, 2:PSoC6...)>"
+		.usage = "<enabled on|off> <target_type (0:PSoC4, 1:PSoC5-LP, 2:PSoC6, 3:TVII)>"
 			"<mode (0: Reset, 1: Power Cycle)> <attempts> [<timeout_sec> <ap_num>]",
 		.help = "Controls PSoC acquisition during init phase",
 	},
@@ -786,6 +781,15 @@ static const struct command_registration kitprog3_command_handlers[] = {
 #define POWER_STABLE_TIMEOUT_MS 5000l
 static int kitprog3_power_dropout(int *power_dropout)
 {
+	static uint16_t prev_mv;
+
+	if (initial_voltage == UINT16_MAX || prev_mv == 0) {
+		*power_dropout = 0;
+		int hr = kitprog3_get_power(&initial_voltage);
+		prev_mv = initial_voltage;
+		return hr;
+	}
+
 	const int max_error  = KP3_TARGET_VOLTAGE_MAX_ERROR_PC * initial_voltage / 100;
 	static int64_t last_mv_change_time;
 
@@ -795,7 +799,6 @@ static int kitprog3_power_dropout(int *power_dropout)
 		return hr;
 
 	bool dropout = false;
-	static uint16_t prev_mv;
 
 	const bool mv_wrong = abs(initial_voltage - now_mv) > max_error;
 	const bool mv_now_changed = abs(prev_mv - now_mv) > max_error;
@@ -814,9 +817,7 @@ static int kitprog3_power_dropout(int *power_dropout)
 		dropout = false;
 	}
 
-	*power_dropout = (int)(voltage_changed | dropout);
-	voltage_changed = false;
-
+	*power_dropout = dropout;
 	return ERROR_OK;
 }
 

@@ -115,7 +115,7 @@ static int gdb_error(struct connection *connection, int retval);
 static char *gdb_port;
 static char *gdb_port_next;
 
-static void gdb_log_callback(void *priv, const char *file, unsigned line,
+static void gdb_log_callback(void *priv, enum log_levels level, const char *file, unsigned line,
 		const char *function, const char *string);
 
 static void gdb_sig_halted(struct connection *connection);
@@ -135,7 +135,8 @@ static int gdb_flash_program = 1;
  * see the code in gdb_read_memory_packet() for further explanations.
  * Disabled by default.
  */
-static int gdb_report_data_abort;
+/* BHDT: Enabled due to PT-2099 */
+static int gdb_report_data_abort = 1;
 /* If set, errors when accessing registers are reported to gdb. Disabled by
  * default. */
 static int gdb_report_register_access_error;
@@ -985,15 +986,6 @@ static int gdb_new_connection(struct connection *connection)
 	breakpoint_clear_target(target);
 	watchpoint_clear_target(target);
 
-	if (target->rtos) {
-		/* clean previous rtos session if supported*/
-		if (target->rtos->type->clean)
-			target->rtos->type->clean(target);
-
-		/* update threads */
-		rtos_update_threads(target);
-	}
-
 	/* remove the initial ACK from the incoming buffer */
 	retval = gdb_get_char(connection, &initial_ack);
 	if (retval != ERROR_OK)
@@ -1005,6 +997,15 @@ static int gdb_new_connection(struct connection *connection)
 	if (initial_ack != '+')
 		gdb_putback_char(connection, initial_ack);
 	target_call_event_callbacks(target, TARGET_EVENT_GDB_ATTACH);
+
+	if (target->rtos) {
+		/* clean previous rtos session if supported*/
+		if (target->rtos->type->clean)
+			target->rtos->type->clean(target);
+
+		/* update threads */
+		rtos_update_threads(target);
+	}
 
 	if (gdb_use_memory_map) {
 		/* Connect must fail if the memory map can't be set up correctly.
@@ -3306,7 +3307,7 @@ static int gdb_fileio_response_packet(struct connection *connection,
 	return ERROR_OK;
 }
 
-static void gdb_log_callback(void *priv, const char *file, unsigned line,
+static void gdb_log_callback(void *priv, enum log_levels level, const char *file, unsigned line,
 		const char *function, const char *string)
 {
 	struct connection *connection = priv;

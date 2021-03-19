@@ -1116,6 +1116,39 @@ err_free_wa_algo:
 	return hr;
 }
 
+static bool mxs40_is_address_bootable(uint32_t variant, target_addr_t addr)
+{
+	switch (variant) {
+	case MXS40_VARIANT_PSOC6_BLE2:
+		return  (addr >= 0x10000000 && addr < 0x10100000) || /* Main Flash, 1 MiB max */
+				(addr >= 0x08000000 && addr < 0x08048000) || /* RAM, 288 KiB max */
+				(addr >= 0x18000000 && addr < 0x20000000);   /* XIP, 128 MiB max */
+
+	case MXS40_VARIANT_PSOC6A_2M:
+		return  (addr >= 0x10000000 && addr < 0x10200000) || /* Main Flash, 2 MiB max */
+				(addr >= 0x08000000 && addr < 0x08100000) || /* RAM, 1 MiB max */
+				(addr >= 0x18000000 && addr < 0x20000000);   /* XIP, 128 MiB max */
+
+	case MXS40_VARIANT_MACAW:
+		return  (addr < 0x00008000) ||                       /* ROM, 32 KiB max */
+				(addr >= 0x08000000 && addr < 0x08002000);   /* RAM, 8 KiB max */
+
+	case MXS40_VARIANT_TRAVEO_II:
+		return  (addr >= 0x10000000 && addr < 0x10400000) || /* Main Flash, 4 MiB max */
+				(addr >= 0x08000000 && addr < 0x08080000) || /* RAM, 512 KiB max */
+				(addr >= 0x18000000 && addr < 0x20000000);   /* XIP, 128 MiB max */
+
+	case MXS40_VARIANT_TRAVEO_II_8M:
+		return  (addr >= 0x10000000 && addr < 0x10800000) || /* Main Flash, 8 MiB max */
+				(addr >= 0x28000000 && addr < 0x28100000) || /* RAM, 1 MiB max */
+				(addr >= 0x60000000 && addr < 0xA0000000);   /* SMIF0/1, 1 GiB max */
+
+	default:
+		LOG_WARNING("Unsupported MXS40 variant: %" PRIu32 ", reset_halt may fail" , variant);
+		return true;
+	}
+}
+
 /** ***********************************************************************************************
  * @brief Simulates broken Vector Catch
  * Function will try to determine entry point of user application. If it succeeds it will set HW
@@ -1167,9 +1200,7 @@ static int mxs40_reset_halt(struct target *target, enum reset_halt_mode mode)
 	if (hr != ERROR_OK)
 		return hr;
 
-	/* Invalid value means flash is empty */
-	vt_base &= 0xFFFFFF00;
-	if (vt_base < 0x10000000 || vt_base > 0x18000000) {
+	if (!mxs40_is_address_bootable(info->regs->variant, vt_base)) {
 		LOG_INFO("Vector Table address invalid (0x%08X), reset_halt skipped ", vt_base);
 		return ERROR_OK;
 	}
@@ -1181,7 +1212,7 @@ static int mxs40_reset_halt(struct target *target, enum reset_halt_mode mode)
 		return hr;
 
 	/* Invalid value means flash is empty */
-	if (reset_addr == 0 || reset_addr == 0xFFFFFFFF) {
+	if (!mxs40_is_address_bootable(info->regs->variant, reset_addr)) {
 		LOG_INFO("Entry Point address invalid (0x%08X), reset_halt skipped", reset_addr);
 		return ERROR_OK;
 	}
@@ -1212,8 +1243,24 @@ static int mxs40_reset_halt(struct target *target, enum reset_halt_mode mode)
 
 	/* Reset the CM0 by asserting SYSRESETREQ. This will also reset CM4 */
 	LOG_INFO("%s: bkpt @0x%08X, issuing %s", target->cmd_name, reset_addr, mode_str);
+
+	/* Workaround for PT-2019, both cores enter LOCKUP state with slow JTAG clock
+	 * This happens probably because JTAG pins gets disconnected momentarily when
+	 * SYSRESETREQ bit is written causing invalid JTAG state when pins gets connected
+	 * back to the DAP by the boot code. */
+#if(0)
 	mem_ap_write_atomic_u32(armv7m->debug_ap, NVIC_AIRCR,
 		AIRCR_VECTKEY | rst_mask);
+#else
+	mem_ap_write_u32(armv7m->debug_ap, NVIC_AIRCR, AIRCR_VECTKEY | rst_mask);
+	struct adiv5_dap *dap = armv7m->debug_ap->dap;
+	if(dap->ops->sync) {
+		dap->ops->sync(dap);
+	} else {
+		/* SWD DAP does not support sync() method, use run() instead */
+		dap->ops->run(dap);
+	}
+#endif
 
 	jtag_sleep(jtag_get_nsrst_delay() * 1000u);
 

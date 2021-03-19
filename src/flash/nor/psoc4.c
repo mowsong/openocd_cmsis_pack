@@ -96,6 +96,10 @@
 /* register locations */
 #define PSOC4_SFLASH_MACRO0             0x0FFFF000
 #define PSOC4_SFLASH_MACRO0_v2          0x0FFFE000
+#define PSOC4_MFLASH_MACRO1             0x10000000
+
+#define PSOC4_FLASH_PROTECTION_BANK     0x90400000
+#define PSOC4_CHIP_PROTECTION_BANK      0x90600000
 
 #define PSOC4_CPUSS_BASE_LEGACY         0x40000000
 #define PSOC4_CPUSS_SYSREQ_LEGACY       PSOC4_CPUSS_BASE_LEGACY + 0x04
@@ -157,6 +161,8 @@
 
 #define PSOC4_FAMILY_FLAG_LEGACY        (1u << 0)
 #define PSOC4_FLAG_IMO_NOT_REQUIRED     (1u << 1)
+
+#define RAM_STACK_WA_SIZE 512
 
 struct spcif_regs {
 	uint32_t geometry_addr;
@@ -233,31 +239,45 @@ const struct sflash_type sflash_256 = {
 
 struct psoc4_chip_family {
 	uint16_t id;
+	uint16_t siid_range[2];
 	const char *name;
 	uint32_t flags;
 	enum spcif_ver spcif_ver;
 };
 
 const struct psoc4_chip_family psoc4_families[] = {
-	{ 0x93, "PSoC 4100/4200",                       .flags = PSOC4_FAMILY_FLAG_LEGACY | PSOC4_FLAG_IMO_NOT_REQUIRED, .spcif_ver = spcif_v2 }, /* has known SROM bug (CDT#184422). */
-	{ 0x9A, "PSoC 4000",                            .flags = 0, .spcif_ver = spcif_v2 }, /* has known SROM bug (CDT#184422) */
-	{ 0x9E, "PSoC 4xx7 BLE",                        .flags = 0, .spcif_ver = spcif_v2 },
-	{ 0xA0, "PSoC 4200L",                           .flags = PSOC4_FLAG_IMO_NOT_REQUIRED, .spcif_ver = spcif_v2 },
-	{ 0xA1, "PSoC 4100M/4200M",                     .flags = PSOC4_FLAG_IMO_NOT_REQUIRED, .spcif_ver = spcif_v2 },
-	{ 0xA3, "PSoC 4xx8 BLE",                        .flags = PSOC4_FLAG_IMO_NOT_REQUIRED, .spcif_ver = spcif_v2 },
-	{ 0xA7, "PSoC 4000DS/4200DS",                   .flags = 0, .spcif_ver = spcif_v2 },
-	{ 0xA9, "PSoC 4000S/4700S",                     .flags = 0, .spcif_ver = spcif_v3 },
-	{ 0xAA, "PSoC 4xx8 BLE",                        .flags = PSOC4_FLAG_IMO_NOT_REQUIRED, .spcif_ver = spcif_v2 },
-	{ 0xAB, "PSoC 4100S",                           .flags = 0, .spcif_ver = spcif_v3 },
-	{ 0xAC, "PSoC 4100PS/PSoC Analog Coprocessor",  .flags = 0, .spcif_ver = spcif_v3 },
-	{ 0xAE, "PSoC 4xx8 BLE",                        .flags = PSOC4_FLAG_IMO_NOT_REQUIRED, .spcif_ver = spcif_v2 },
-	{ 0xB5, "PSoC 4100S Plus",                      .flags = 0, .spcif_ver = spcif_v3 },
-	{ 0xB8, "PSoC 4100S Plus/PSoC 4500",            .flags = 0, .spcif_ver = spcif_v3 },
-	{ 0xBE, "PSoC 4100S Max",                       .flags = 0, .spcif_ver = spcif_v3 },
-	{ 0xC0, "CCG6DF USB Type-C Port Controller",    .flags = 0, .spcif_ver = spcif_v3 },
-	{ 0xC3, "CCG6SF USB Type-C Port Controller",    .flags = 0, .spcif_ver = spcif_v3 },
-	{ 0,    "Unknown",                              .flags = 0, .spcif_ver = spcif_unknown }
+	{ 0x93, {0, 0},           "PSoC 4100/4200",                       .flags = PSOC4_FAMILY_FLAG_LEGACY | PSOC4_FLAG_IMO_NOT_REQUIRED, .spcif_ver = spcif_v2 }, /* has known SROM bug (CDT#184422). */
+	{ 0x9A, {0, 0},           "PSoC 4000",                            .flags = 0, .spcif_ver = spcif_v2 }, /* has known SROM bug (CDT#184422) */
+	{ 0x9E, {0, 0},           "PSoC 4xx7 BLE",                        .flags = 0, .spcif_ver = spcif_v2 },
+	{ 0xA0, {0, 0},           "PSoC 4200L",                           .flags = PSOC4_FLAG_IMO_NOT_REQUIRED, .spcif_ver = spcif_v2 },
+	{ 0xA1, {0, 0},           "PSoC 4100M/4200M",                     .flags = PSOC4_FLAG_IMO_NOT_REQUIRED, .spcif_ver = spcif_v2 },
+	{ 0xA3, {0, 0},           "PSoC 4xx8 BLE",                        .flags = PSOC4_FLAG_IMO_NOT_REQUIRED, .spcif_ver = spcif_v2 },
+	{ 0xA7, {0, 0},           "PSoC 4000DS/4200DS",                   .flags = 0, .spcif_ver = spcif_v2 },
+	{ 0xA9, {0, 0},           "PSoC 4000S/4700S",                     .flags = 0, .spcif_ver = spcif_v3 },
+	{ 0xAA, {0, 0},           "PSoC 4xx8 BLE",                        .flags = PSOC4_FLAG_IMO_NOT_REQUIRED, .spcif_ver = spcif_v2 },
+	{ 0xAB, {0, 0},           "PSoC 4100S",                           .flags = 0, .spcif_ver = spcif_v3 },
+	{ 0xAC, {0, 0},           "PSoC 4100PS/PSoC Analog Coprocessor",  .flags = 0, .spcif_ver = spcif_v3 },
+	{ 0xAD, {0x1D20, 0x1DFF}, "PMG1-S2",                              .flags = 0, .spcif_ver = spcif_v3 },
+	{ 0xAD, {0x1D00, 0x1D1F}, "CCG3",                                 .flags = 0, .spcif_ver = spcif_v3 },
+	{ 0xAE, {0, 0},           "PSoC 4xx8 BLE",                        .flags = PSOC4_FLAG_IMO_NOT_REQUIRED, .spcif_ver = spcif_v2 },
+	{ 0xB0, {0x2020, 0x204F}, "PMG1-S0",                              .flags = 0, .spcif_ver = spcif_v3 },
+	{ 0xB0, {0x2000, 0x20FF}, "CCG3PA",                               .flags = 0, .spcif_ver = spcif_v3 },
+	{ 0xB5, {0, 0},           "PSoC 4100S Plus",                      .flags = 0, .spcif_ver = spcif_v3 },
+	{ 0xB7, {0, 0},           "TrueTouch TSG7L",                      .flags = 0, .spcif_ver = spcif_v3 },
+	{ 0xB8, {0, 0},           "PSoC 4100S Plus/PSoC 4500",            .flags = 0, .spcif_ver = spcif_v3 },
+	{ 0xBA, {0x2A20, 0x2AFF}, "PMG1-S1",                              .flags = 0, .spcif_ver = spcif_v3 },
+	{ 0xBA, {0x2A00, 0x2A1F}, "CCG6",                                 .flags = 0, .spcif_ver = spcif_v3 },
+	{ 0xBE, {0, 0},           "PSoC 4100S Max",                       .flags = 0, .spcif_ver = spcif_v3 },
+	{ 0xC0, {0, 0},           "CCG6DF",                               .flags = 0, .spcif_ver = spcif_v3 },
+	{ 0xC2, {0, 0},           "PSoC4 HV PA",                          .flags = 0, .spcif_ver = spcif_v3 },
+	{ 0xC3, {0, 0},           "CCG6SF",                               .flags = 0, .spcif_ver = spcif_v3 },
+	{ 0xC5, {0, 0},           "PMG1-S3",                              .flags = 0, .spcif_ver = spcif_v3 },
+	{ 0,    {0, 0},           "Unknown",                              .flags = 0, .spcif_ver = spcif_unknown }
 };
+
+const char * chip_prot_msg = "Warn:\tChip protection state is %s. Chip's resources access is locked down.\r\n"
+		"\tThe state can be set back to OPEN but only after completely erasing the flash.\r\n"
+		"\tTo do so, perform erase operation with PSOC4_USE_MEM_AP variable set.";
 
 struct psoc4_flash_bank {
 	uint32_t row_size;
@@ -279,7 +299,7 @@ struct psoc4_flash_bank {
 
 static bool is_sflash_base_v2(uint16_t family_id)
 {
-	return family_id == 0xBE;
+	return (family_id == 0xBE) || (family_id == 0xC2);
 }
 
 static bool is_sflash_bank(struct flash_bank *bank)
@@ -288,9 +308,33 @@ static bool is_sflash_bank(struct flash_bank *bank)
 			(bank->base & PSOC4_SFLASH_MACRO0_v2) == PSOC4_SFLASH_MACRO0_v2;
 }
 
+static bool is_wflash_bank(struct flash_bank *bank)
+{
+	return 	(bank->base & PSOC4_MFLASH_MACRO1) == PSOC4_MFLASH_MACRO1;
+}
+
 static bool is_flash_prot_bank(struct flash_bank *bank)
 {
-	return bank->base == 0x90400000;
+	return bank->base == PSOC4_FLASH_PROTECTION_BANK;
+}
+
+static bool is_chip_prot_bank(struct flash_bank *bank)
+{
+	return bank->base == PSOC4_CHIP_PROTECTION_BANK;
+}
+
+static const char * psoc4_get_family_name(uint16_t family_id, uint16_t siid)
+{
+	const struct psoc4_chip_family *p = psoc4_families;
+	while (p->id) {
+		if (p->id == family_id && p->siid_range[0] == 0 && p->siid_range[1] == 0)
+			break;
+		if (p->id == family_id && siid >= p->siid_range[0] && siid <= p->siid_range[1])
+			break;
+		p++;
+	}
+
+	return p->name;
 }
 
 /**************************************************************************************************
@@ -546,16 +590,9 @@ static int psoc4_sysreq(struct flash_bank *bank, uint8_t cmd,
 	};
 
 	const int code_words = (sizeof(psoc4_sysreq_wait_code) + 3) / 4;
-	/* stack must be aligned */
-	const int stack_size = 256;
-	/* tested stack sizes on PSoC4200:
-			ERASE_ALL	144
-			PROGRAM_ROW	112
-			other sysreq	 68
-	*/
 
 	/* allocate area for sysreq wait code and stack */
-	if (target_alloc_working_area(target, code_words * 4 + stack_size,
+    if (target_alloc_working_area(target, code_words * 4 + RAM_STACK_WA_SIZE,
 		&sysreq_wait_algorithm) != ERROR_OK) {
 		LOG_DEBUG("no working area for sysreq code");
 		return ERROR_TARGET_RESOURCE_NOT_AVAILABLE;
@@ -834,6 +871,12 @@ static int psoc4_flash_prepare(struct flash_bank *bank)
  *************************************************************************************************/
 static int psoc4_flash_prot_read(struct flash_bank *bank, uint8_t *buffer, uint32_t offset, uint32_t count)
 {
+	if(count == 0)
+		return ERROR_OK;
+
+	if(is_chip_prot_bank(bank))
+		return psoc4_get_silicon_id(bank, false, NULL, NULL, buffer);
+
 	struct target *target = bank->target;
 	struct psoc4_flash_bank *psoc4_info = bank->driver_priv;
 
@@ -1158,7 +1201,6 @@ static int psoc4_protect(struct flash_bank *bank, int set, unsigned int first, u
 	return retval;
 }
 
-#define RAM_STACK_WA_SIZE 512
 #define CMD_BUFFER_EMPTY 0
 #define CMD_BUFFER_FULL  1
 #define CMD_BUFFER_DONE  2
@@ -1175,8 +1217,11 @@ static int psoc4_protect(struct flash_bank *bank, int set, unsigned int first, u
 static int psoc4_write_inner(struct flash_bank *bank, const uint8_t *buffer,
 	uint32_t offset, uint32_t count, int operation)
 {
+	uint32_t sflash_mask = 0;
+	uint32_t wflash_mask = 0;
 
-	const uint32_t sflash_mask = is_sflash_bank(bank) ? 0x80000000 : 0x00000000;
+	if (is_sflash_bank(bank)) sflash_mask = 0x80000000;
+	else if (is_wflash_bank(bank)) sflash_mask = 0x40000000;
 
 	static const uint8_t p4_legacy_algo[] = {
 		#include "../../../contrib/loaders/flash/psoc4/psoc4_legacy_write.inc"
@@ -1255,7 +1300,8 @@ static int psoc4_write_inner(struct flash_bank *bank, const uint8_t *buffer,
 	buf_set_u32(reg_params[0].value, 0, 32, wa_buffer->address);
 
 	init_reg_param(&reg_params[1], "r1", 32, PARAM_OUT);
-	buf_set_u32(reg_params[1].value, 0, 32, (offset / psoc4_info->row_size) | sflash_mask);
+	buf_set_u32(reg_params[1].value, 0, 32, (offset / psoc4_info->row_size)
+				| sflash_mask | wflash_mask);
 
 	init_reg_param(&reg_params[2], "r2", 32, PARAM_OUT);
 	buf_set_u32(reg_params[2].value, 0, 32, psoc4_info->row_size);
@@ -1348,12 +1394,14 @@ static int psoc4_write(struct flash_bank *bank, const uint8_t *buffer, uint32_t 
 /*************************************************************************************************
  * @brief Perform writes to the psoc4_flash_prot bank
  * @param bank current flash bank
+ * @param chip_level_prot chip level protection to be programmed
  * @param buffer pointer to the buffer with flash protection data
  * @param offset starting offset in flash protection where buffer will be written
  * @param count number of bytes in buffer
  * @return ERROR_OK in case of success, ERROR_XXX code otherwise
  *************************************************************************************************/
-static int psoc4_flash_prot_write(struct flash_bank *bank, const uint8_t *buffer, uint32_t offset, uint32_t count)
+static int psoc4_flash_prot_write_inner(struct flash_bank *bank, int chip_level_prot, const uint8_t *buffer,
+										uint32_t offset, uint32_t count)
 {
 	struct psoc4_flash_bank *psoc4_info = bank->driver_priv;
 
@@ -1368,7 +1416,7 @@ static int psoc4_flash_prot_write(struct flash_bank *bank, const uint8_t *buffer
 	while (count)
 	{
 		uint32_t bytes_this_run = bytes_per_macro - offset < count ? bytes_per_macro - offset : count;
-		retval = write_flash_macro_protection(bank, PSOC4_CHIP_PROT_OPEN, buffer, bytes_this_run, offset, cur_macro++);
+		retval = write_flash_macro_protection(bank, chip_level_prot, buffer, bytes_this_run, offset, cur_macro++);
 		if (retval != ERROR_OK)
 			break;
 
@@ -1385,6 +1433,56 @@ static int psoc4_flash_prot_write(struct flash_bank *bank, const uint8_t *buffer
 	return retval;
 }
 
+static int psoc4_chip_protect(struct target *target)
+{
+	struct flash_bank *bank = NULL;
+	int retval = get_flash_bank_by_addr(target, PSOC4_FLASH_PROTECTION_BANK, true, &bank);
+	if (retval != ERROR_OK)
+		return retval;
+
+	uint8_t prot_buffer[bank->size];
+	retval = flash_driver_read(bank, prot_buffer, 0, bank->size);
+	if (retval != ERROR_OK)
+		return retval;
+
+	retval = psoc4_flash_prot_write_inner(bank, PSOC4_CHIP_PROT_PROTECTED, prot_buffer, 0, bank->size);
+	if (retval != ERROR_OK)
+		return retval;
+
+	LOG_INFO("Chip protection will take effect after Reset");
+	return ERROR_OK;
+}
+
+static int psoc4_flash_prot_write(struct flash_bank *bank, const uint8_t *buffer, uint32_t offset, uint32_t count)
+{
+	if(is_chip_prot_bank(bank)) {
+		assert(offset == 0);
+		assert(count == 1);
+		uint8_t current_prot = 0;
+		int retval = psoc4_get_silicon_id(bank, false, NULL, NULL, &current_prot);
+		if(retval != ERROR_OK)
+			return retval;
+
+		if(current_prot == *buffer)
+			return ERROR_OK;
+
+		if(current_prot == PSOC4_CHIP_PROT_OPEN && *buffer == PSOC4_CHIP_PROT_PROTECTED)
+			return psoc4_chip_protect(bank->target);
+
+		if(current_prot == PSOC4_CHIP_PROT_PROTECTED && *buffer == PSOC4_CHIP_PROT_OPEN) {
+			LOG_ERROR("Protection 'OPEN' can not be applied while chip is in 'PROTECTED' state, "
+						"use 'psoc4 mass_erase 0' to unlock the chip");
+		} else {
+			LOG_ERROR("Transition '%s' -> '%s' is not supported",
+					  psoc4_decode_chip_protection(current_prot),
+					  psoc4_decode_chip_protection(*buffer));
+		}
+
+		return ERROR_FAIL;
+	} else {
+		return psoc4_flash_prot_write_inner(bank, PSOC4_CHIP_PROT_OPEN, buffer, offset, count);
+	}
+}
 
 /*************************************************************************************************
  * @brief Erases entire psoc4_flash_prot bank
@@ -1395,6 +1493,15 @@ static int psoc4_flash_prot_write(struct flash_bank *bank, const uint8_t *buffer
  *************************************************************************************************/
 static int psoc4_flash_prot_erase(struct flash_bank *bank, unsigned int first, unsigned int last)
 {
+	(void)first;
+	(void)last;
+
+	if(is_chip_prot_bank(bank)) {
+		LOG_WARNING("Erase of Chip Protection bank is not supported, "
+					"use 'psoc4 mass_erase 0' to unlock the chip");
+		return ERROR_OK;
+	}
+
 	struct target *target = bank->target;
 	struct psoc4_flash_bank *psoc4_info = bank->driver_priv;
 	uint32_t prot_sz = psoc4_info->num_rows / psoc4_info->num_macros / 8;
@@ -1603,6 +1710,27 @@ exit:
 	return retval;
 }
 
+/**************************************************************************************************
+ * @brief Detects PSoC 4 device in Protected state
+ * @param bank current flash bank
+ * @param protection pointer to variable, will be populated with protection state
+ * @return true in case of device is Protected, false otherwise
+ *************************************************************************************************/
+bool is_chip_protected(struct flash_bank *bank, uint8_t *protection) {
+	struct target *target = bank->target;
+	uint32_t val;
+
+	/* Read CPU ID */
+	int retval = target_read_u32(target, 0xE000ED00, &val);
+	if (retval != ERROR_OK) {
+		/* If read has failed, run silicon ID SROM API to ensure chip is protected */
+		retval = psoc4_get_silicon_id(bank, true, NULL, NULL, protection);
+		if (retval == ERROR_OK && *protection == PSOC4_CHIP_PROT_PROTECTED){
+			return true;
+		}
+	}
+	return false;
+}
 
 /**************************************************************************************************
  * @brief Determines bank size based on UDD if device exists there or read from silicon
@@ -1628,20 +1756,9 @@ void psoc4_decode_silicon_info(struct flash_bank *bank)
 	/* Retrieve family and revision IDs */
 	int hr = psoc4_read_geometry(bank, &si_family_id, &si_revision_id, &flash_size_in_kb, &row_size, &num_macros);
 	if (hr != ERROR_OK) {
-		/* if it fails, chip must be protected, lets check by reading a word from the flash */
-		uint32_t val;
-		int retval = target_read_u32(target, bank->base, &val);
-		if (retval == ERROR_OK)
-			goto error_exit;
-
-		/* If flash read fails chip is probably protected, lets check by running a SROM API */
-		retval = psoc4_get_silicon_id(bank, true, NULL, NULL, &protection);
-		if (retval == ERROR_OK && protection == PSOC4_CHIP_PROT_PROTECTED)
-		{
-			LOG_USER("Warn:\tChip protection state is %s. Chip's resources access is locked down.", psoc4_decode_chip_protection(protection));
-			LOG_USER("\tThe state can be set back to OPEN but only after completely erasing the flash.");
-			LOG_USER("\tTo do so, perform erase operation with PSOC4_USE_MEM_AP variable set.");
-
+		/* For new PSoC4 devices geometry determination might fail in case of Protected device, lets check */
+		if (is_chip_protected(bank, &protection)) {
+			LOG_USER(chip_prot_msg, psoc4_decode_chip_protection(protection));
 			g_info_displayed = true;
 		}
 		goto error_exit;
@@ -1654,8 +1771,14 @@ void psoc4_decode_silicon_info(struct flash_bank *bank)
 	uint32_t tmp = 0;
 	psoc4_info->sflash_descr = psoc4_sflash_by_geometry(row_size, num_macros);
 	hr = target_read_u32(target, psoc4_info->sflash_descr->siid_offs + psoc4_info->sflash_base, &tmp);
-	if (hr != ERROR_OK)
+	if (hr != ERROR_OK) {
+		/* For some PSoC4 devices reading might fail at this point indicating Protected state of the device, lets check */
+		if (is_chip_protected(bank, &protection)) {
+			LOG_USER(chip_prot_msg, psoc4_decode_chip_protection(protection));
+			g_info_displayed = true;
+		}
 		goto error_exit;
+	}
 
 	si_siid = tmp & 0xFFFF;  /* 15:0 */
 
@@ -1707,7 +1830,7 @@ void psoc4_decode_silicon_info(struct flash_bank *bank)
 	else {
 		psoc4_get_wounded_flash_size(bank, flash_size_in_kb * 1024u, &udd_mflash_size);
 	}
-	LOG_USER("** Detected Family: %s", psoc4_family_by_id(si_family_id)->name);
+	LOG_USER("** Detected Family: %s", psoc4_get_family_name(si_family_id, si_siid));
 	LOG_USER("** Detected Main Flash size, kb: %d", udd_mflash_size / 1024u);
 	LOG_USER("** Chip Protection: %s", psoc4_decode_chip_protection(protection));
 	LOG_USER("*****************************************");
@@ -1772,7 +1895,13 @@ static int psoc4_probe(struct flash_bank *bank)
 	}
 	else {
 		uint32_t mflash_size;
-		psoc4_get_wounded_flash_size(bank, flash_size_in_kb * 1024u, &mflash_size);
+		/* HACK HACK HACK
+		 * flash wounding can not be read when device is in PROTECTED state */
+		if(bank->target->coreid != 255) {
+			psoc4_get_wounded_flash_size(bank, flash_size_in_kb * 1024u, &mflash_size);
+		} else {
+			mflash_size = flash_size_in_kb * 1024u;
+		}
 		num_rows = mflash_size / row_size;
 	}
 
@@ -1827,15 +1956,21 @@ static int psoc4_auto_probe(struct flash_bank *bank)
  *************************************************************************************************/
 static int psoc4_flash_prot_probe(struct flash_bank *bank)
 {
+	struct psoc4_flash_bank *psoc4_info = bank->driver_priv;
+
 	int retval = psoc4_probe(bank);
 	if (retval != ERROR_OK)
 		return retval;
 
+	if(is_chip_prot_bank(bank)) {
+		bank->size = 1;
+	} else {
+		bank->size = psoc4_info->num_rows / 8;
+	}
+
 	if (bank->sectors)
 		free(bank->sectors);
 
-	struct psoc4_flash_bank *psoc4_info = bank->driver_priv;
-	bank->size = psoc4_info->num_rows / 8;
 	bank->num_sectors = 1;
 	bank->sectors = alloc_block_array(0, bank->size, bank->num_sectors);
 	if (bank->sectors == NULL)
@@ -1858,6 +1993,10 @@ static int psoc4_flash_prot_auto_probe(struct flash_bank *bank)
 	return psoc4_flash_prot_probe(bank);
 }
 
+static int psoc4_flash_prot_blank_check(struct flash_bank *bank) {
+	LOG_ERROR("Chip Protection bank does not support erase_check operation");
+	return ERROR_FLASH_OPER_UNSUPPORTED;
+}
 
 /**************************************************************************************************
  * @brief Display human-readable information about the flash bank into the given buffer.
@@ -1910,6 +2049,172 @@ static int get_psoc4_info(struct flash_bank *bank, char *buf, int buf_size)
 	return ERROR_OK;
 }
 
+static bool g_ecc_enabled;
+
+#define CPUSS_SPCIF0_FLASH_CTL      (PSOC4_CPUSS_BASE_NEW + 0x10000 + 0x0C)
+#define CPUSS_SPCIF1_FLASH_CTL      (PSOC4_CPUSS_BASE_NEW + 0x20000 + 0x0C)
+#define CPUSS_SPCIF_FLASH_ECC_EN    (0x01 << 16)
+
+#define CPUSS_FLASH0_CTL            (PSOC4_CPUSS_BASE_NEW + 0x30)
+#define CPUSS_FLASH1_CTL            (PSOC4_CPUSS_BASE_NEW + 0xA8)
+#define CPUSS_FLASH_CTL_ECC_INJ_EN  (0x01 << 20)
+#define CPUSS_FLASH_CTL_ERR_SILENT  (0x01 << 21)
+
+#define FAULT_STRUCT_SIZE           0x00000100
+#define FAULT_BASE(n)               (0x40130000 + (n) * FAULT_STRUCT_SIZE)
+#define FAULT_STATUS_VALID_MASK     0x80000000
+
+#define FAULT_CTL(n)                (FAULT_BASE((n)) + 0x00)
+#define FAULT_STATUS(n)             (FAULT_BASE((n)) + 0x0C)
+#define FAULT_DATA0(n)              (FAULT_BASE((n)) + 0x10)
+#define FAULT_DATA1(n)              (FAULT_BASE((n)) + 0x14)
+#define FAULT_MASK0(n)              (FAULT_BASE((n)) + 0x50)
+
+#define FAULT_MASK0_FLASH0_C_ECC    (0x01 << 4)
+#define FAULT_MASK0_FLASH0_NC_ECC   (0x01 << 5)
+#define FAULT_MASK0_FLASH1_C_ECC    (0x01 << 7)
+#define FAULT_MASK0_FLASH1_NC_ECC   (0x01 << 8)
+
+#define FAULT_MASK0_ENABLE_ECC_MASK (FAULT_MASK0_FLASH0_C_ECC | FAULT_MASK0_FLASH0_NC_ECC | \
+	FAULT_MASK0_FLASH1_C_ECC | FAULT_MASK0_FLASH1_NC_ECC)
+
+/** ***********************************************************************************************
+ * @brief Configures ECC error reporting on Traveo-II devices
+ * @param target current target
+ * @param enabled true if ECC error reporting should be enabled
+ * @return ERROR_OK in case of success, ERROR_XXX code otherwise
+ *************************************************************************************************/
+static int psoc4_configure_ecc(struct target *target, bool enabled)
+{
+	int hr;
+
+	/* Disable FAULT[1] */
+	hr = target_write_u32(target, FAULT_CTL(1), 0);
+	if (hr != ERROR_OK)
+		return hr;
+
+	hr = target_write_u32(target, FAULT_MASK0(1), 0);
+	if (hr != ERROR_OK)
+		return hr;
+
+	/* Common config for FAULT[0] */
+	hr = target_write_u32(target, FAULT_CTL(0), 0);
+	if (hr != ERROR_OK)
+		return hr;
+
+	hr = target_write_u32(target, FAULT_MASK0(0), 0);
+	if (hr != ERROR_OK)
+		return hr;
+
+	uint32_t flashc0_ctl_val;
+	hr = target_read_u32(target, CPUSS_SPCIF0_FLASH_CTL, &flashc0_ctl_val);
+	if (hr != ERROR_OK)
+		return hr;
+
+	uint32_t flashc1_ctl_val;
+	hr = target_read_u32(target, CPUSS_SPCIF1_FLASH_CTL, &flashc1_ctl_val);
+	if (hr != ERROR_OK)
+		return hr;
+
+	uint32_t fault_mask0;
+	if (enabled) {
+		flashc0_ctl_val |= CPUSS_SPCIF_FLASH_ECC_EN;
+		flashc1_ctl_val |= CPUSS_SPCIF_FLASH_ECC_EN;
+		fault_mask0 = FAULT_MASK0_ENABLE_ECC_MASK;
+
+
+	} else {
+		flashc0_ctl_val &= ~CPUSS_SPCIF_FLASH_ECC_EN;
+		flashc1_ctl_val &= ~CPUSS_SPCIF_FLASH_ECC_EN;
+		fault_mask0 = 0;
+	}
+
+	hr = target_write_u32(target, CPUSS_SPCIF0_FLASH_CTL, flashc0_ctl_val);
+	if (hr != ERROR_OK)
+		return hr;
+
+	hr = target_write_u32(target, CPUSS_SPCIF1_FLASH_CTL, flashc1_ctl_val);
+	if (hr != ERROR_OK)
+		return hr;
+
+	hr = target_write_u32(target, FAULT_MASK0(0), fault_mask0);
+	if (hr != ERROR_OK)
+		return hr;
+
+	return ERROR_OK;
+}
+
+/** ***********************************************************************************************
+ * @brief Performs Flash Read operation with ECC error reporting. This function is used in Traveo-II
+ * devices only since PSoC6 does not support ECC.
+ * @param bank The bank to read
+ * @param buffer The data bytes read
+ * @param offset The offset into the chip to read
+ * @param count The number of bytes to read
+ * @return ERROR_OK in case of success, ERROR_XXX code otherwise
+ *************************************************************************************************/
+static int psoc4_flash_read(struct flash_bank *bank, uint8_t *buffer, uint32_t offset,
+	uint32_t count)
+{
+	if (!g_ecc_enabled)
+		return default_flash_read(bank, buffer, offset, count);
+
+	assert(offset % 4 == 0);
+	assert(count % 4 == 0);
+	int hr = target_write_u32(bank->target, FAULT_STATUS(0), 0x00);
+	if (hr != ERROR_OK)
+		return hr;
+
+	uint32_t address = bank->base + offset;
+
+	while (count) {
+		hr = target_read_buffer(bank->target, address, 4, buffer);
+		if (hr != ERROR_OK)
+			return hr;
+
+		uint32_t status = 0;
+		do {
+			hr = target_read_u32(bank->target, FAULT_STATUS(0), &status);
+			if (hr != ERROR_OK)
+				return hr;
+
+			if (status & FAULT_STATUS_VALID_MASK) {
+				uint32_t er_addr;
+				hr = target_read_u32(bank->target, FAULT_DATA0(0), &er_addr);
+				if (hr != ERROR_OK)
+					return hr;
+
+				LOG_WARNING("ECC Error at address 0x%08X", er_addr);
+
+				hr = target_write_u32(bank->target, FAULT_STATUS(0), 0x00);
+				if (hr != ERROR_OK)
+					return hr;
+			}
+		} while (status & FAULT_STATUS_VALID_MASK);
+
+		count -= 4;
+		buffer += 4;
+		address += 4;
+	}
+
+	return ERROR_OK;
+}
+
+COMMAND_HANDLER(psoc4_handle_ecc_error_reporting_command)
+{
+	if (CMD_ARGC != 1)
+		return ERROR_COMMAND_SYNTAX_ERROR;
+
+	COMMAND_PARSE_ON_OFF(CMD_ARGV[0], g_ecc_enabled);
+
+	struct target *target = get_current_target(CMD_CTX);
+
+	int hr = psoc4_configure_ecc(target, g_ecc_enabled);
+	LOG_INFO("ECC error reporting is now %s", g_ecc_enabled ? "Enabled" : "Disabled");
+
+	return hr;
+}
+
 COMMAND_HANDLER(psoc4_handle_reset_halt)
 {
 	if (CMD_ARGC > 0)
@@ -1959,6 +2264,14 @@ COMMAND_HANDLER(psoc4_handle_silicon_info_command)
 	return ERROR_OK;
 }
 
+COMMAND_HANDLER(psoc4_handle_chip_protect)
+{
+	if (CMD_ARGC != 0)
+		return ERROR_COMMAND_SYNTAX_ERROR;
+
+	return psoc4_chip_protect(get_current_target(CMD_CTX));
+}
+
 static const struct command_registration psoc4_exec_command_handlers[] = {
 	{
 		.name = "mass_erase",
@@ -1981,7 +2294,20 @@ static const struct command_registration psoc4_exec_command_handlers[] = {
 		.usage = "",
 		.help = "Prints detailed info about the connected silicon",
 	},
-
+	{
+		.name = "chip_protect",
+		.handler = psoc4_handle_chip_protect,
+		.mode = COMMAND_EXEC,
+		.usage = "",
+		.help = "Moves the part to PROTECTED state",
+	},
+	{
+		.name = "ecc_error_reporting",
+		.handler = psoc4_handle_ecc_error_reporting_command,
+		.mode = COMMAND_EXEC,
+		.usage = "on|off",
+		.help = "Controls ECC error reporting",
+	},
 	COMMAND_REGISTRATION_DONE
 };
 
@@ -2003,7 +2329,7 @@ const struct flash_driver psoc4_flash = {
 	.erase = psoc4_erase,
 	.protect = psoc4_protect,
 	.write = psoc4_write,
-	.read = default_flash_read,
+	.read = psoc4_flash_read,
 	.probe = psoc4_probe,
 	.auto_probe = psoc4_auto_probe,
 	.erase_check = default_flash_blank_check,
@@ -2022,7 +2348,7 @@ const struct flash_driver psoc4_flash_prot = {
 	.read = psoc4_flash_prot_read,
 	.probe = psoc4_flash_prot_probe,
 	.auto_probe = psoc4_flash_prot_auto_probe,
-	.erase_check = default_flash_blank_check,
+	.erase_check = psoc4_flash_prot_blank_check,
 	.protect_check = NULL,
 	.info = get_psoc4_info,
 	.free_driver_priv = default_flash_free_driver_priv,

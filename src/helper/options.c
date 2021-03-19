@@ -45,6 +45,7 @@
 #endif
 
 static int help_flag, version_flag;
+int telnet_add_prefix;
 
 static const struct option long_options[] = {
 	{"help",		no_argument,			&help_flag,		1},
@@ -55,6 +56,7 @@ static const struct option long_options[] = {
 	{"log_output",	required_argument,		0,				'l'},
 	{"command",		required_argument,		0,				'c'},
 	{"pipe",		no_argument,			0,				'p'},
+	{"gui",			no_argument,			0,				'g'},
 	{0, 0, 0, 0}
 };
 
@@ -245,7 +247,7 @@ int parse_cmdline_args(struct command_context *cmd_ctx, int argc, char *argv[])
 		/* getopt_long stores the option index here. */
 		int option_index = 0;
 
-		c = getopt_long(argc, argv, "hvd::l:f:s:c:p", long_options, &option_index);
+		c = getopt_long(argc, argv, "hvd::l:f:s:c:p:g", long_options, &option_index);
 
 		/* Detect the end of the options. */
 		if (c == -1)
@@ -292,6 +294,9 @@ int parse_cmdline_args(struct command_context *cmd_ctx, int argc, char *argv[])
 				LOG_WARNING("deprecated option: -p/--pipe. Use '-c \"gdb_port pipe; "
 						"log_output openocd.log\"' instead.");
 				break;
+			case 'g':
+				telnet_add_prefix = 1;
+				break;
 			default:  /* '?' */
 				/* getopt will emit an error message, all we have to do is bail. */
 				return ERROR_FAIL;
@@ -314,6 +319,7 @@ int parse_cmdline_args(struct command_context *cmd_ctx, int argc, char *argv[])
 		LOG_OUTPUT("             | -d<n>\tset debug level to <level>\n");
 		LOG_OUTPUT("--log_output | -l\tredirect log output to file <name>\n");
 		LOG_OUTPUT("--command    | -c\trun <command>\n");
+		LOG_OUTPUT("--gui        | -g\tprint message prefixes in telnet connections\n");
 		exit(-1);
 	}
 

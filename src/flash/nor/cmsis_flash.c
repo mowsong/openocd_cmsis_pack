@@ -939,7 +939,7 @@ static void cmsis_flash_free_driver_priv(struct flash_bank *bank)
 	}
 }
 
-/* flash bank <name> cmsis_flash <addr> <size> 0 0 <target> <algorithm_elf> <stack_size> */
+/* flash bank <name> cmsis_flash <addr> <size> 0 0 <target> <algorithm_elf> <stack_size> [prefer_sector_erase]*/
 FLASH_BANK_COMMAND_HANDLER(cmsis_flash_bank_command)
 {
 	if (CMD_ARGC < 8 || CMD_ARGC > 9) {
@@ -1113,6 +1113,55 @@ COMMAND_HANDLER(cmsis_flash_initialize)
 	return ERROR_OK;
 }
 
+COMMAND_HANDLER(prefer_sector_erase)
+{
+	int arg_index_bank = -1;
+	const char *arg_str_onoff = NULL;
+
+	if(CMD_ARGC == 1) {
+		arg_str_onoff = CMD_ARGV[0];
+	} else if(CMD_ARGC == 2) {
+		arg_index_bank = 0; /* CMD_ARGV[0] */
+		arg_str_onoff = CMD_ARGV[1];
+	} else {
+		LOG_ERROR("cmsis_flash prefer_sector_erase: wrong number of params");
+		return ERROR_COMMAND_SYNTAX_ERROR;
+	}
+	
+	/* Parse on/off parameter accepting any of following: "on|off|enable|disable|yes|no|true|false|1|0" */
+	bool arg_onoff = false;
+	int retval = command_parse_bool_arg(arg_str_onoff, &arg_onoff);
+	if (ERROR_OK != retval) {
+		LOG_ERROR("cmsis_flash prefer_sector_erase: wrong arguments");
+		return ERROR_COMMAND_SYNTAX_ERROR;
+	}
+
+	if (arg_index_bank >= 0) {
+		/* Optional bank Id is provided, apply for specified bank only */
+		struct flash_bank *bank;
+		retval = CALL_COMMAND_HANDLER(flash_command_get_bank, arg_index_bank, &bank);
+		if ((ERROR_OK != retval) || (strcmp("cmsis_flash", bank->driver->name) != 0)) {
+			LOG_ERROR("cmsis_flash prefer_sector_erase: wrong bank_id or driver is not cmsis_flash");
+			return ERROR_COMMAND_SYNTAX_ERROR;
+		}
+		struct cmsis_flash *algo = bank->driver_priv;
+		LOG_INFO("Setting \'prefer_sector_erase %s\' for cmsis_flash bank %s (%s)", arg_str_onoff, bank->name, algo->flash_dev.dev_name);
+		algo->prefer_sector_erase = arg_onoff;
+	} else {
+		/* Bank Id is not provided, apply for all banks */
+		for(struct flash_bank *bank_iter = flash_bank_list(); bank_iter; bank_iter = bank_iter->next) {
+			struct flash_bank *bank = bank_iter;
+			if(strcmp("cmsis_flash", bank->driver->name) != 0)
+				continue;
+			struct cmsis_flash *algo = bank->driver_priv;
+			LOG_INFO("Setting \'prefer_sector_erase %s\' for cmsis_flash bank %s (%s)", arg_str_onoff, bank->name, algo->flash_dev.dev_name);
+			algo->prefer_sector_erase = arg_onoff;
+		}
+	}
+
+	return ERROR_OK;
+}
+
 static const struct command_registration cmsis_flash_exec_command_handlers[] = {
 	{
 		.name = "init",
@@ -1120,6 +1169,13 @@ static const struct command_registration cmsis_flash_exec_command_handlers[] = {
 		.mode = COMMAND_EXEC,
 		.usage = "[bank name]",
 		.help = "initializes all cmsis_flash banks",
+	},
+	{
+		.name = "prefer_sector_erase",
+		.handler = prefer_sector_erase,
+		.mode = COMMAND_EXEC,
+		.usage = "[bank_id] <on|off|enable|disable|yes|no|true|false|1|0>",
+		.help = "sets prefer_sector_erase property",
 	},
 	COMMAND_REGISTRATION_DONE
 };
