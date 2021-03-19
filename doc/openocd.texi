@@ -505,6 +505,12 @@ Texas Instruments has an adapter called @b{ICDI}.
 It is not to be confused with the FTDI based adapters that were originally fitted to their
 evaluation boards. This is the adapter fitted to the Stellaris LaunchPad.
 
+@section USB Nuvoton Nu-Link
+Nuvoton has an adapter called @b{Nu-Link}.
+It is available either as stand-alone dongle and embedded on development boards.
+It supports SWD, serial port bridge and mass storage for firmware update.
+Both Nu-Link v1 and v2 are supported.
+
 @section USB CMSIS-DAP based
 ARM has released a interface standard called CMSIS-DAP that simplifies connecting
 debuggers to ARM Cortex based targets @url{http://www.keil.com/support/man/docs/dapdebug/dapdebug_introduction.htm}.
@@ -1020,7 +1026,7 @@ will help support users of any board using that chip.
 @end quotation
 
 @item
-You may may need to write some C code.
+You may need to write some C code.
 It may be as simple as supporting a new FT2232 or parport
 based adapter; a bit more involved, like a NAND or NOR flash
 controller driver; or a big piece of work like supporting
@@ -3064,7 +3070,8 @@ This is a driver that supports multiple High Level Adapters.
 This type of adapter does not expose some of the lower level api's
 that OpenOCD would normally use to access the target.
 
-Currently supported adapters include the STMicroelectronics ST-LINK and TI ICDI.
+Currently supported adapters include the STMicroelectronics ST-LINK, TI ICDI
+and Nuvoton Nu-Link.
 ST-LINK firmware version >= V2.J21.S4 recommended due to issues with earlier
 versions of firmware where serial number is reset after first use.  Suggest
 using ST firmware update utility to upgrade ST-LINK firmware even if current
@@ -3078,7 +3085,7 @@ Currently Not Supported.
 Specifies the serial number of the adapter.
 @end deffn
 
-@deffn {Config Command} {hla_layout} (@option{stlink}|@option{icdi})
+@deffn {Config Command} {hla_layout} (@option{stlink}|@option{icdi}|@option{nulink})
 Specifies the adapter layout to use.
 @end deffn
 
@@ -4637,7 +4644,8 @@ The value should normally correspond to a static mapping for the
 @item @code{-rtos} @var{rtos_type} -- enable rtos support for target,
 @var{rtos_type} can be one of @option{auto}, @option{eCos},
 @option{ThreadX}, @option{FreeRTOS}, @option{linux}, @option{ChibiOS},
-@option{embKernel}, @option{mqx}, @option{uCOS-III}, @option{nuttx}
+@option{embKernel}, @option{mqx}, @option{uCOS-III}, @option{nuttx},
+@option{RIOT}
 @xref{gdbrtossupport,,RTOS Support}.
 
 @item @code{-defer-examine} -- skip target examination at initial JTAG chain
@@ -5875,7 +5883,7 @@ at91samd bootloader 16384
 @deffn Command {at91samd dsu_reset_deassert}
 This command releases internal reset held by DSU
 and prepares reset vector catch in case of reset halt.
-Command is used internally in event event reset-deassert-post.
+Command is used internally in event reset-deassert-post.
 @end deffn
 
 @deffn Command {at91samd nvmuserrow}
@@ -5982,7 +5990,7 @@ The AT91SAM4L driver adds some additional commands:
 @deffn Command {at91sam4l smap_reset_deassert}
 This command releases internal reset held by SMAP
 and prepares reset vector catch in case of reset halt.
-Command is used internally in event event reset-deassert-post.
+Command is used internally in event reset-deassert-post.
 @end deffn
 @end deffn
 
@@ -6023,7 +6031,7 @@ processor to be halted.
 @deffn Command {atsame5 dsu_reset_deassert}
 This command releases internal reset held by DSU
 and prepares reset vector catch in case of reset halt.
-Command is used internally in event event reset-deassert-post.
+Command is used internally in event reset-deassert-post.
 @end deffn
 
 @deffn Command {atsame5 userpage}
@@ -8606,7 +8614,7 @@ and any buffered trace data is invalidated.
 
 @itemize
 @item @var{type} ... describing how data accesses are traced,
-when they pass any ViewData filtering that that was set up.
+when they pass any ViewData filtering that was set up.
 The value is one of
 @option{none} (save nothing),
 @option{data} (save data),
@@ -8954,7 +8962,7 @@ and any other core-specific commands that may be available.
 
 @deffn Command {arm7_9 dbgrq} [@option{enable}|@option{disable}]
 Displays the value of the flag controlling use of the
-the EmbeddedIce DBGRQ signal to force entry into debug mode,
+EmbeddedIce DBGRQ signal to force entry into debug mode,
 instead of breakpoints.
 If a boolean parameter is provided, first assigns that flag.
 
@@ -10770,6 +10778,7 @@ Currently supported rtos's include:
 @item @option{mqx}
 @item @option{uCOS-III}
 @item @option{nuttx}
+@item @option{RIOT}
 @item @option{hwthread} (This is not an actual RTOS. @xref{usingopenocdsmpwithgdb,,Using OpenOCD SMP with GDB}.)
 @end itemize
 
@@ -10806,6 +10815,8 @@ _mqx_kernel_data, MQX_init_struct.
 OSRunning, OSTCBCurPtr, OSTaskDbgListPtr, OSTaskQty
 @item nuttx symbols
 g_readytorun, g_tasklisttable
+@item RIOT symbols
+sched_threads, sched_num_threads, sched_active_pid, max_threads, _tcb_name_offset
 @end table
 
 For most RTOS supported the above symbols will be exported by default. However for

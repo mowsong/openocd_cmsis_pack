@@ -71,7 +71,7 @@ struct target_desc_format {
 
 /* private connection data for GDB */
 struct gdb_connection {
-	char buffer[GDB_BUFFER_SIZE + 1]; /* Extra byte for nul-termination */
+	char buffer[GDB_BUFFER_SIZE + 1]; /* Extra byte for null-termination */
 	char *buf_p;
 	int buf_cnt;
 	bool ctrl_c;
@@ -1033,6 +1033,17 @@ static int gdb_new_connection(struct connection *connection)
 			gdb_actual_connections,
 			target_name(target),
 			target_state_name(target));
+
+	if (!target_was_examined(target)) {
+		LOG_ERROR("Target %s not examined yet, refuse gdb connection %d!",
+				  target_name(target), gdb_actual_connections);
+		gdb_actual_connections--;
+		return ERROR_TARGET_NOT_EXAMINED;
+	}
+
+	if (target->state != TARGET_HALTED)
+		LOG_WARNING("GDB connection %d on target %s not halted",
+					gdb_actual_connections, target_name(target));
 
 	/* DANGER! If we fail subsequently, we must remove this handler,
 	 * otherwise we occasionally see crashes as the timer can invoke the
@@ -3338,7 +3349,7 @@ static void gdb_sig_halted(struct connection *connection)
 static int gdb_input_inner(struct connection *connection)
 {
 	/* Do not allocate this on the stack */
-	static char gdb_packet_buffer[GDB_BUFFER_SIZE + 1]; /* Extra byte for nul-termination */
+	static char gdb_packet_buffer[GDB_BUFFER_SIZE + 1]; /* Extra byte for null-termination */
 
 	struct target *target;
 	char const *packet = gdb_packet_buffer;
@@ -3628,7 +3639,7 @@ static int gdb_target_start(struct target *target, const char *port)
 	ret = add_service("gdb",
 			port, 1, &gdb_new_connection, &gdb_input,
 			&gdb_connection_closed, gdb_service);
-	/* initialialize all targets gdb service with the same pointer */
+	/* initialize all targets gdb service with the same pointer */
 	{
 		struct target_list *head;
 		struct target *curr;

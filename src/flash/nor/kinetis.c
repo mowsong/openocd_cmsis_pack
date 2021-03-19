@@ -79,7 +79,7 @@
  *
  */
 
-/* Addressess */
+/* Addresses */
 #define FCF_ADDRESS	0x00000400
 #define FCF_FPROT	0x8
 #define FCF_FSEC	0xc
@@ -389,7 +389,6 @@ static const struct kinetis_type kinetis_types_old[] = {
 
 static bool allow_fcf_writes;
 static uint8_t fcf_fopt = 0xff;
-static bool fcf_fopt_configured;
 static bool create_banks;
 
 
@@ -507,7 +506,7 @@ COMMAND_HANDLER(kinetis_mdm_halt)
 		}
 	}
 
-	LOG_DEBUG("MDM: halt succeded after %d attempts.", tries);
+	LOG_DEBUG("MDM: halt succeeded after %d attempts.", tries);
 
 	target_poll(target);
 	/* enable polling in case kinetis_check_flash_security_status disabled it */
@@ -1250,7 +1249,7 @@ static int kinetis_write_block(struct flash_bank *bank, const uint8_t *buffer,
 		uint32_t offset, uint32_t wcount)
 {
 	struct target *target = bank->target;
-	uint32_t buffer_size = 2048;		/* Default minimum value */
+	uint32_t buffer_size;
 	struct working_area *write_algorithm;
 	struct working_area *source;
 	struct kinetis_flash_bank *k_bank = bank->driver_priv;
@@ -1260,10 +1259,6 @@ static int kinetis_write_block(struct flash_bank *bank, const uint8_t *buffer,
 	struct armv7m_algorithm armv7m_info;
 	int retval;
 	uint8_t fstat;
-
-	/* Increase buffer_size if needed */
-	if (buffer_size < (target->working_area_size/2))
-		buffer_size = (target->working_area_size/2);
 
 	/* allocate working area with flash programming code */
 	if (target_alloc_working_area(target, sizeof(kinetis_flash_write_code),
@@ -1277,16 +1272,19 @@ static int kinetis_write_block(struct flash_bank *bank, const uint8_t *buffer,
 	if (retval != ERROR_OK)
 		return retval;
 
-	/* memory buffer */
-	while (target_alloc_working_area(target, buffer_size, &source) != ERROR_OK) {
-		buffer_size /= 4;
-		if (buffer_size <= 256) {
-			/* free working area, write algorithm already allocated */
-			target_free_working_area(target, write_algorithm);
+	/* memory buffer, size *must* be multiple of word */
+	buffer_size = target_get_working_area_avail(target) & ~(sizeof(uint32_t) - 1);
+	if (buffer_size < 256) {
+		LOG_WARNING("large enough working area not available, can't do block memory writes");
+		return ERROR_TARGET_RESOURCE_NOT_AVAILABLE;
+	} else if (buffer_size > 16384) {
+		/* probably won't benefit from more than 16k ... */
+		buffer_size = 16384;
+	}
 
-			LOG_WARNING("No large enough working area available, can't do block memory writes");
-			return ERROR_TARGET_RESOURCE_NOT_AVAILABLE;
-		}
+	if (target_alloc_working_area(target, buffer_size, &source) != ERROR_OK) {
+		LOG_ERROR("allocating working area failed");
+		return ERROR_TARGET_RESOURCE_NOT_AVAILABLE;
 	}
 
 	armv7m_info.common_magic = ARMV7M_COMMON_MAGIC;
@@ -1431,7 +1429,7 @@ static int kinetis_fill_fcf(struct flash_bank *bank, uint8_t *fcf)
 		bank_iter = k_bank->bank;
 
 		if (bank_iter == NULL) {
-			LOG_WARNING("Missing bank %u configuration, FCF protection flags may be incomplette", bank_idx);
+			LOG_WARNING("Missing bank %u configuration, FCF protection flags may be incomplete", bank_idx);
 			continue;
 		}
 
@@ -1651,8 +1649,6 @@ static int kinetis_erase(struct flash_bank *bank, unsigned int first,
 			return ERROR_FLASH_OPERATION_FAILED;
 		}
 
-		bank->sectors[i].is_erased = 1;
-
 		if (k_bank->prog_base == 0
 			&& bank->sectors[i].offset <= FCF_ADDRESS
 			&& bank->sectors[i].offset + bank->sectors[i].size > FCF_ADDRESS + FCF_SIZE) {
@@ -1666,7 +1662,8 @@ static int kinetis_erase(struct flash_bank *bank, unsigned int first,
 				result = kinetis_write_inner(bank, fcf_buffer, FCF_ADDRESS, FCF_SIZE);
 				if (result != ERROR_OK)
 					LOG_WARNING("Flash Configuration Field write failed");
-				bank->sectors[i].is_erased = 0;
+				else
+					LOG_DEBUG("Generated FCF written");
 			}
 		}
 	}
@@ -1910,6 +1907,7 @@ static int kinetis_write(struct flash_bank *bank, const uint8_t *buffer,
 	int result;
 	bool set_fcf = false;
 	bool fcf_in_data_valid = false;
+	bool fcf_differs = false;
 	int sect = 0;
 	struct kinetis_flash_bank *k_bank = bank->driver_priv;
 	struct kinetis_chip *k_chip = k_bank->k_chip;
@@ -1942,31 +1940,45 @@ static int kinetis_write(struct flash_bank *bank, const uint8_t *buffer,
 					 && offset + count >= FCF_ADDRESS + FCF_SIZE;
 		if (fcf_in_data_valid) {
 			memcpy(fcf_in_data, buffer + FCF_ADDRESS - offset, FCF_SIZE);
-			if (memcmp(fcf_in_data + FCF_FPROT, fcf_buffer, 4)) {
-				fcf_in_data_valid = false;
-				LOG_INFO("Flash protection requested in programmed file differs from current setting.");
+			if (memcmp(fcf_in_data, fcf_buffer, 8)) {
+				fcf_differs = true;
+				LOG_INFO("Setting of backdoor key is not supported in mode 'kinetis fcf_source protection'.");
+			}
+			if (memcmp(fcf_in_data + FCF_FPROT, fcf_buffer + FCF_FPROT, 4)) {
+				fcf_differs = true;
+				LOG_INFO("Flash protection requested in the programmed file differs from current setting.");
 			}
 			if (fcf_in_data[FCF_FDPROT] != fcf_buffer[FCF_FDPROT]) {
-				fcf_in_data_valid = false;
-				LOG_INFO("Data flash protection requested in programmed file differs from current setting.");
+				fcf_differs = true;
+				LOG_INFO("Data flash protection requested in the programmed file differs from current setting.");
 			}
 			if ((fcf_in_data[FCF_FSEC] & 3) != 2) {
 				fcf_in_data_valid = false;
-				LOG_INFO("Device security requested in programmed file!");
-			} else if (k_chip->flash_support & FS_ECC
-			    && fcf_in_data[FCF_FSEC] != fcf_buffer[FCF_FSEC]) {
-				fcf_in_data_valid = false;
+				LOG_INFO("Device security requested in the programmed file! Write denied.");
+			} else if (fcf_in_data[FCF_FSEC] != fcf_buffer[FCF_FSEC]) {
+				fcf_differs = true;
 				LOG_INFO("Strange unsecure mode 0x%02" PRIx8
-					 "requested in programmed file!",
-					 fcf_in_data[FCF_FSEC]);
+					" requested in the programmed file, set FSEC = 0x%02" PRIx8
+					" in the startup code!",
+					fcf_in_data[FCF_FSEC], fcf_buffer[FCF_FSEC]);
 			}
-			if ((k_chip->flash_support & FS_ECC || fcf_fopt_configured)
-			    && fcf_in_data[FCF_FOPT] != fcf_fopt) {
-				fcf_in_data_valid = false;
-				LOG_INFO("FOPT requested in programmed file differs from current setting.");
+			if (fcf_in_data[FCF_FOPT] != fcf_buffer[FCF_FOPT]) {
+				fcf_differs = true;
+				LOG_INFO("FOPT requested in the programmed file differs from current setting, set 'kinetis fopt 0x%02"
+					PRIx8 "'.", fcf_in_data[FCF_FOPT]);
 			}
-			if (!fcf_in_data_valid)
-				LOG_INFO("Expect verify errors at FCF (0x408-0x40f).");
+
+			/* If the device has ECC flash, then we cannot re-program FCF */
+			if (fcf_differs) {
+				if (k_chip->flash_support & FS_ECC) {
+					fcf_in_data_valid = false;
+					LOG_INFO("Cannot re-program FCF. Expect verify errors at FCF (0x400-0x40f).");
+				} else {
+					LOG_INFO("Trying to re-program FCF.");
+					if (!(k_chip->flash_support & FS_PROGRAM_LONGWORD))
+						LOG_INFO("Flash re-programming may fail on this device!");
+				}
+			}
 		}
 	}
 
@@ -2838,7 +2850,7 @@ static int kinetis_blank_check(struct flash_bank *bank)
 				if (result == ERROR_OK) {
 					bank->sectors[i].is_erased = !(ftfx_fstat & 0x01);
 				} else {
-					LOG_DEBUG("Ignoring errored PFlash sector blank-check");
+					LOG_DEBUG("Ignoring error on PFlash sector blank-check");
 					kinetis_ftfx_clear_error(bank->target);
 					bank->sectors[i].is_erased = -1;
 				}
@@ -3036,7 +3048,6 @@ COMMAND_HANDLER(kinetis_fopt_handler)
 
 	if (CMD_ARGC == 1) {
 		fcf_fopt = (uint8_t)strtoul(CMD_ARGV[0], NULL, 0);
-		fcf_fopt_configured = true;
 	} else {
 		command_print(CMD, "FCF_FOPT 0x%02" PRIx8, fcf_fopt);
 	}

@@ -355,6 +355,15 @@ static int new_target_number(void)
 	return x + 1;
 }
 
+static void append_to_list_all_targets(struct target *target)
+{
+	struct target **t = &all_targets;
+
+	while (*t)
+		t = &((*t)->next);
+	*t = target;
+}
+
 /* read a uint64_t from a buffer in target memory endianness */
 uint64_t target_buffer_get_u64(struct target *target, const uint8_t *buffer)
 {
@@ -604,7 +613,7 @@ int target_halt(struct target *target)
  * @param address Optionally used as the program counter.
  * @param handle_breakpoints True iff breakpoints at the resumption PC
  *	should be skipped.  (For example, maybe execution was stopped by
- *	such a breakpoint, in which case it would be counterprodutive to
+ *	such a breakpoint, in which case it would be counterproductive to
  *	let it re-trigger.
  * @param debug_execution False if all working areas allocated by OpenOCD
  *	should be released and/or restored to their original contents.
@@ -720,7 +729,7 @@ static int default_check_reset(struct target *target)
 	return ERROR_OK;
 }
 
-/* Equvivalent Tcl code arp_examine_one is in src/target/startup.tcl
+/* Equivalent Tcl code arp_examine_one is in src/target/startup.tcl
  * Keep in sync */
 int target_examine_one(struct target *target)
 {
@@ -1392,8 +1401,17 @@ int target_get_gdb_reg_list(struct target *target,
 		struct reg **reg_list[], int *reg_list_size,
 		enum target_register_class reg_class)
 {
-	int result = target->type->get_gdb_reg_list(target, reg_list,
+	int result = ERROR_FAIL;
+
+	if (!target_was_examined(target)) {
+		LOG_ERROR("Target not examined yet");
+		goto done;
+	}
+
+	result = target->type->get_gdb_reg_list(target, reg_list,
 			reg_list_size, reg_class);
+
+done:
 	if (result != ERROR_OK) {
 		*reg_list = NULL;
 		*reg_list_size = 0;
@@ -3655,7 +3673,7 @@ COMMAND_HANDLER(handle_load_image_command)
 		uint32_t offset = 0;
 		uint32_t length = buf_cnt;
 
-		/* DANGER!!! beware of unsigned comparision here!!! */
+		/* DANGER!!! beware of unsigned comparison here!!! */
 
 		if ((image.sections[i].base_address + buf_cnt >= min_address) &&
 				(image.sections[i].base_address < max_address)) {
@@ -5025,7 +5043,7 @@ static int target_configure(Jim_GetOptInfo *goi, struct target *target)
 		}
 		switch (n->value) {
 		case TCFG_TYPE:
-			/* not setable */
+			/* not settable */
 			if (goi->isconfigure) {
 				Jim_SetResultFormatted(goi->interp,
 						"not settable: %s", n->name);
@@ -5834,12 +5852,21 @@ static int target_create(Jim_GetOptInfo *goi)
 
 	/* Create it */
 	target = calloc(1, sizeof(struct target));
+	if (!target) {
+		LOG_ERROR("Out of memory");
+		return JIM_ERR;
+	}
+
 	/* set target number */
 	target->target_number = new_target_number();
-	cmd_ctx->current_target = target;
 
 	/* allocate memory for each unique target type */
-	target->type = calloc(1, sizeof(struct target_type));
+	target->type = malloc(sizeof(struct target_type));
+	if (!target->type) {
+		LOG_ERROR("Out of memory");
+		free(target);
+		return JIM_ERR;
+	}
 
 	memcpy(target->type, target_types[x], sizeof(struct target_type));
 
@@ -5868,6 +5895,12 @@ static int target_create(Jim_GetOptInfo *goi)
 
 	/* initialize trace information */
 	target->trace_info = calloc(1, sizeof(struct trace));
+	if (!target->trace_info) {
+		LOG_ERROR("Out of memory");
+		free(target->type);
+		free(target);
+		return JIM_ERR;
+	}
 
 	target->dbgmsg          = NULL;
 	target->dbg_msg_enabled = 0;
@@ -5901,7 +5934,9 @@ static int target_create(Jim_GetOptInfo *goi)
 	}
 
 	if (e != JIM_OK) {
+		rtos_destroy(target);
 		free(target->gdb_port_override);
+		free(target->trace_info);
 		free(target->type);
 		free(target);
 		return e;
@@ -5914,14 +5949,25 @@ static int target_create(Jim_GetOptInfo *goi)
 
 	cp = Jim_GetString(new_cmd, NULL);
 	target->cmd_name = strdup(cp);
+	if (!target->cmd_name) {
+		LOG_ERROR("Out of memory");
+		rtos_destroy(target);
+		free(target->gdb_port_override);
+		free(target->trace_info);
+		free(target->type);
+		free(target);
+		return JIM_ERR;
+	}
 
 	if (target->type->target_create) {
 		e = (*(target->type->target_create))(target, goi->interp);
 		if (e != ERROR_OK) {
 			LOG_DEBUG("target_create failed");
-			free(target->gdb_port_override);
-			free(target->type);
 			free(target->cmd_name);
+			rtos_destroy(target);
+			free(target->gdb_port_override);
+			free(target->trace_info);
+			free(target->type);
 			free(target);
 			return JIM_ERR;
 		}
@@ -5932,15 +5978,6 @@ static int target_create(Jim_GetOptInfo *goi)
 		e = register_commands(cmd_ctx, NULL, target->type->commands);
 		if (ERROR_OK != e)
 			LOG_ERROR("unable to register '%s' commands", cp);
-	}
-
-	/* append to end of list */
-	{
-		struct target **tpp;
-		tpp = &(all_targets);
-		while (*tpp)
-			tpp = &((*tpp)->next);
-		*tpp = target;
 	}
 
 	/* now - create the new target name command */
@@ -5964,14 +6001,27 @@ static int target_create(Jim_GetOptInfo *goi)
 		COMMAND_REGISTRATION_DONE
 	};
 	e = register_commands(cmd_ctx, NULL, target_commands);
-	if (ERROR_OK != e)
+	if (e != ERROR_OK) {
+		if (target->type->deinit_target)
+			target->type->deinit_target(target);
+		free(target->cmd_name);
+		rtos_destroy(target);
+		free(target->gdb_port_override);
+		free(target->trace_info);
+		free(target->type);
+		free(target);
 		return JIM_ERR;
+	}
 
 	struct command *c = command_find_in_context(cmd_ctx, cp);
 	assert(c);
 	command_set_handler_data(c, target);
 
-	return (ERROR_OK == e) ? JIM_OK : JIM_ERR;
+	/* append to end of list */
+	append_to_list_all_targets(target);
+
+	cmd_ctx->current_target = target;
+	return JIM_OK;
 }
 
 static int jim_target_current(Jim_Interp *interp, int argc, Jim_Obj *const *argv)
@@ -6030,7 +6080,7 @@ static int jim_target_smp(Jim_Interp *interp, int argc, Jim_Obj *const *argv)
 	retval = 0;
 	LOG_DEBUG("%d", argc);
 	/* argv[1] = target to associate in smp
-	 * argv[2] = target to assoicate in smp
+	 * argv[2] = target to associate in smp
 	 * argv[3] ...
 	 */
 
@@ -6200,7 +6250,7 @@ COMMAND_HANDLER(handle_fast_load_image_command)
 		uint32_t offset = 0;
 		uint32_t length = buf_cnt;
 
-		/* DANGER!!! beware of unsigned comparision here!!! */
+		/* DANGER!!! beware of unsigned comparison here!!! */
 
 		if ((image.sections[i].base_address + buf_cnt >= min_address) &&
 				(image.sections[i].base_address < max_address)) {
