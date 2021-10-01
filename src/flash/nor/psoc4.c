@@ -654,7 +654,7 @@ static int psoc4_sysreq(struct flash_bank *bank, uint8_t cmd,
 		sysreq_wait_algorithm->address + sysreq_wait_algorithm->size);
 
 	struct armv7m_common *armv7m = target_to_armv7m(target);
-	if (armv7m == NULL) {
+	if (!armv7m) {
 		/* something is very wrong if armv7m is NULL */
 		LOG_ERROR("unable to get armv7m target");
 		retval = ERROR_FAIL;
@@ -2017,13 +2017,11 @@ static int get_psoc4_info(struct flash_bank *bank, char *buf, int buf_size)
 	uint32_t size_in_kb = bank->size / 1024;
 
 	if (target->state != TARGET_HALTED) {
-		snprintf(buf, buf_size, "%s, flash %" PRIu32 " kb"
+		command_print_sameline(cmd, "%s, flash %" PRIu32 " kb"
 			" (halt target to see details)", family->name, size_in_kb);
 		return ERROR_OK;
 	}
 
-	int retval;
-	int printed = 0;
 	uint32_t silicon_id;
 	uint16_t family_id;
 	uint8_t protection;
@@ -2041,11 +2039,8 @@ static int get_psoc4_info(struct flash_bank *bank, char *buf, int buf_size)
 				family->name, silicon_id);
 	}
 
-	buf += printed;
-	buf_size -= printed;
-
 	const char *prot_txt = psoc4_decode_chip_protection(protection);
-	snprintf(buf, buf_size, ", flash %" PRIu32 " kb %s", size_in_kb, prot_txt);
+	command_print_sameline(cmd, ", flash %" PRIu32 " kb %s", size_in_kb, prot_txt);
 	return ERROR_OK;
 }
 
@@ -2231,7 +2226,7 @@ COMMAND_HANDLER(psoc4_handle_mass_erase_command)
 
 	struct flash_bank *bank;
 	int retval = CALL_COMMAND_HANDLER(flash_command_get_bank, 0, &bank);
-	if (ERROR_OK != retval)
+	if (retval != ERROR_OK)
 		return retval;
 
 	if (is_flash_prot_bank(bank))

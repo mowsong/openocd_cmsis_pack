@@ -23,6 +23,9 @@
  *   Copyright (C) 2013 Kamal Dasu                                         *
  *   kdasu.kdev@gmail.com                                                  *
  *                                                                         *
+ *   Copyright (C) 2016 Chengyu Zheng                                      *
+ *   chengyu.zheng@polimi.it : watchpoint support                          *
+ *                                                                         *
  *   This program is free software; you can redistribute it and/or modify  *
  *   it under the terms of the GNU General Public License as published by  *
  *   the Free Software Foundation; either version 2 of the License, or     *
@@ -54,11 +57,11 @@
 #include "target_request.h"
 #include "target_type.h"
 #include "arm_opcodes.h"
-#include "jtag/interface.h"
 #include "arm_semihosting.h"
 #include "jtag/interface.h"
 #include "transport/transport.h"
 #include "smp.h"
+#include <helper/bits.h>
 #include <helper/time_support.h>
 
 static int cortex_a_poll(struct target *target);
@@ -81,6 +84,16 @@ static int cortex_a_virt2phys(struct target *target,
 static int cortex_a_read_cpu_memory(struct target *target,
 	uint32_t address, uint32_t size, uint32_t count, uint8_t *buffer);
 
+static unsigned int ilog2(unsigned int x)
+{
+	unsigned int y = 0;
+	x /= 2;
+	while (x) {
+		++y;
+		x /= 2;
+		}
+	return y;
+}
 
 /*  restore cp15_control_reg at resume */
 static int cortex_a_restore_cp15_control_reg(struct target *target)
@@ -691,7 +704,7 @@ static int update_halt_gdb(struct target *target)
 	}
 
 	/* after all targets were updated, poll the gdb serving target */
-	if (gdb_target != NULL && gdb_target != target)
+	if (gdb_target && gdb_target != target)
 		cortex_a_poll(gdb_target);
 	return retval;
 }
@@ -713,7 +726,7 @@ static int cortex_a_poll(struct target *target)
 	/*  the next polling trigger an halt event sent to gdb */
 	if ((target->state == TARGET_HALTED) && (target->smp) &&
 		(target->gdb_service) &&
-		(target->gdb_service->target == NULL)) {
+		(!target->gdb_service->target)) {
 		target->gdb_service->target =
 			get_cortex_a(target, target->gdb_service->core[1]);
 		target_call_event_callbacks(target, TARGET_EVENT_HALTED);
@@ -762,20 +775,6 @@ static int cortex_a_halt(struct target *target)
 	int retval;
 	uint32_t dscr;
 	struct armv7a_common *armv7a = target_to_armv7a(target);
-
-	if (target->state == TARGET_RESET) {
-		if ((jtag_get_reset_config() & RESET_SRST_PULLS_TRST) && jtag_get_srst()) {
-			LOG_ERROR("can't request a halt while in reset if nSRST pulls nTRST");
-			return ERROR_TARGET_FAILURE;
-		} else {
-			/* we came here in a reset_halt or reset_init sequence
-			 * debug entry was already prepared in cortex_a_assert_reset()
-			 */
-			target->debug_reason = DBG_REASON_DBGRQ;
-
-			return ERROR_OK;
-		}
-	}
 
 	/*
 	 * Tell the core to be halted by writing DRCR with 0x1
@@ -1130,7 +1129,8 @@ static int cortex_a_post_debug_entry(struct target *target)
 	return ERROR_OK;
 }
 
-int cortex_a_set_dscr_bits(struct target *target, unsigned long bit_mask, unsigned long value)
+static int cortex_a_set_dscr_bits(struct target *target,
+		unsigned long bit_mask, unsigned long value)
 {
 	struct armv7a_common *armv7a = target_to_armv7a(target);
 	uint32_t dscr;
@@ -1138,7 +1138,7 @@ int cortex_a_set_dscr_bits(struct target *target, unsigned long bit_mask, unsign
 	/* Read DSCR */
 	int retval = mem_ap_read_atomic_u32(armv7a->debug_ap,
 			armv7a->debug_base + CPUDBG_DSCR, &dscr);
-	if (ERROR_OK != retval)
+	if (retval != ERROR_OK)
 		return retval;
 
 	/* clear bitfield */
@@ -1197,7 +1197,7 @@ static int cortex_a_step(struct target *target, int current, target_addr_t addre
 	/* Disable interrupts during single step if requested */
 	if (cortex_a->isrmasking_mode == CORTEX_A_ISRMASK_ON) {
 		retval = cortex_a_set_dscr_bits(target, DSCR_INT_DIS, DSCR_INT_DIS);
-		if (ERROR_OK != retval)
+		if (retval != ERROR_OK)
 			return retval;
 	}
 
@@ -1228,7 +1228,7 @@ static int cortex_a_step(struct target *target, int current, target_addr_t addre
 	/* Re-enable interrupts if they were disabled */
 	if (cortex_a->isrmasking_mode == CORTEX_A_ISRMASK_ON) {
 		retval = cortex_a_set_dscr_bits(target, DSCR_INT_DIS, 0);
-		if (ERROR_OK != retval)
+		if (retval != ERROR_OK)
 			return retval;
 	}
 
@@ -1290,16 +1290,16 @@ static int cortex_a_set_breakpoint(struct target *target,
 		control = ((matchmode & 0x7) << 20)
 			| (byte_addr_select << 5)
 			| (3 << 1) | 1;
-		brp_list[brp_i].used = 1;
+		brp_list[brp_i].used = true;
 		brp_list[brp_i].value = (breakpoint->address & 0xFFFFFFFC);
 		brp_list[brp_i].control = control;
 		retval = cortex_a_dap_write_memap_register_u32(target, armv7a->debug_base
-				+ CPUDBG_BVR_BASE + 4 * brp_list[brp_i].BRPn,
+				+ CPUDBG_BVR_BASE + 4 * brp_list[brp_i].brpn,
 				brp_list[brp_i].value);
 		if (retval != ERROR_OK)
 			return retval;
 		retval = cortex_a_dap_write_memap_register_u32(target, armv7a->debug_base
-				+ CPUDBG_BCR_BASE + 4 * brp_list[brp_i].BRPn,
+				+ CPUDBG_BCR_BASE + 4 * brp_list[brp_i].brpn,
 				brp_list[brp_i].control);
 		if (retval != ERROR_OK)
 			return retval;
@@ -1384,16 +1384,16 @@ static int cortex_a_set_context_breakpoint(struct target *target,
 	control = ((matchmode & 0x7) << 20)
 		| (byte_addr_select << 5)
 		| (3 << 1) | 1;
-	brp_list[brp_i].used = 1;
+	brp_list[brp_i].used = true;
 	brp_list[brp_i].value = (breakpoint->asid);
 	brp_list[brp_i].control = control;
 	retval = cortex_a_dap_write_memap_register_u32(target, armv7a->debug_base
-			+ CPUDBG_BVR_BASE + 4 * brp_list[brp_i].BRPn,
+			+ CPUDBG_BVR_BASE + 4 * brp_list[brp_i].brpn,
 			brp_list[brp_i].value);
 	if (retval != ERROR_OK)
 		return retval;
 	retval = cortex_a_dap_write_memap_register_u32(target, armv7a->debug_base
-			+ CPUDBG_BCR_BASE + 4 * brp_list[brp_i].BRPn,
+			+ CPUDBG_BCR_BASE + 4 * brp_list[brp_i].brpn,
 			brp_list[brp_i].control);
 	if (retval != ERROR_OK)
 		return retval;
@@ -1409,11 +1409,11 @@ static int cortex_a_set_hybrid_breakpoint(struct target *target, struct breakpoi
 	int retval = ERROR_FAIL;
 	int brp_1 = 0;	/* holds the contextID pair */
 	int brp_2 = 0;	/* holds the IVA pair */
-	uint32_t control_CTX, control_IVA;
-	uint8_t CTX_byte_addr_select = 0x0F;
-	uint8_t IVA_byte_addr_select = 0x0F;
-	uint8_t CTX_machmode = 0x03;
-	uint8_t IVA_machmode = 0x01;
+	uint32_t control_ctx, control_iva;
+	uint8_t ctx_byte_addr_select = 0x0F;
+	uint8_t iva_byte_addr_select = 0x0F;
+	uint8_t ctx_machmode = 0x03;
+	uint8_t iva_machmode = 0x01;
 	struct cortex_a_common *cortex_a = target_to_cortex_a(target);
 	struct armv7a_common *armv7a = &cortex_a->armv7a_common;
 	struct cortex_a_brp *brp_list = cortex_a->brp_list;
@@ -1427,7 +1427,7 @@ static int cortex_a_set_hybrid_breakpoint(struct target *target, struct breakpoi
 		(brp_list[brp_1].type != BRP_CONTEXT)) && (brp_1 < cortex_a->brp_num))
 		brp_1++;
 
-	printf("brp(CTX) found num: %d\n", brp_1);
+	LOG_DEBUG("brp(CTX) found num: %d", brp_1);
 	if (brp_1 >= cortex_a->brp_num) {
 		LOG_ERROR("ERROR Can not find free Breakpoint Register Pair");
 		return ERROR_FAIL;
@@ -1437,47 +1437,47 @@ static int cortex_a_set_hybrid_breakpoint(struct target *target, struct breakpoi
 		(brp_list[brp_2].type != BRP_NORMAL)) && (brp_2 < cortex_a->brp_num))
 		brp_2++;
 
-	printf("brp(IVA) found num: %d\n", brp_2);
+	LOG_DEBUG("brp(IVA) found num: %d", brp_2);
 	if (brp_2 >= cortex_a->brp_num) {
 		LOG_ERROR("ERROR Can not find free Breakpoint Register Pair");
 		return ERROR_FAIL;
 	}
 
 	breakpoint->set = brp_1 + 1;
-	breakpoint->linked_BRP = brp_2;
-	control_CTX = ((CTX_machmode & 0x7) << 20)
+	breakpoint->linked_brp = brp_2;
+	control_ctx = ((ctx_machmode & 0x7) << 20)
 		| (brp_2 << 16)
 		| (0 << 14)
-		| (CTX_byte_addr_select << 5)
+		| (ctx_byte_addr_select << 5)
 		| (3 << 1) | 1;
-	brp_list[brp_1].used = 1;
+	brp_list[brp_1].used = true;
 	brp_list[brp_1].value = (breakpoint->asid);
-	brp_list[brp_1].control = control_CTX;
+	brp_list[brp_1].control = control_ctx;
 	retval = cortex_a_dap_write_memap_register_u32(target, armv7a->debug_base
-			+ CPUDBG_BVR_BASE + 4 * brp_list[brp_1].BRPn,
+			+ CPUDBG_BVR_BASE + 4 * brp_list[brp_1].brpn,
 			brp_list[brp_1].value);
 	if (retval != ERROR_OK)
 		return retval;
 	retval = cortex_a_dap_write_memap_register_u32(target, armv7a->debug_base
-			+ CPUDBG_BCR_BASE + 4 * brp_list[brp_1].BRPn,
+			+ CPUDBG_BCR_BASE + 4 * brp_list[brp_1].brpn,
 			brp_list[brp_1].control);
 	if (retval != ERROR_OK)
 		return retval;
 
-	control_IVA = ((IVA_machmode & 0x7) << 20)
+	control_iva = ((iva_machmode & 0x7) << 20)
 		| (brp_1 << 16)
-		| (IVA_byte_addr_select << 5)
+		| (iva_byte_addr_select << 5)
 		| (3 << 1) | 1;
-	brp_list[brp_2].used = 1;
+	brp_list[brp_2].used = true;
 	brp_list[brp_2].value = (breakpoint->address & 0xFFFFFFFC);
-	brp_list[brp_2].control = control_IVA;
+	brp_list[brp_2].control = control_iva;
 	retval = cortex_a_dap_write_memap_register_u32(target, armv7a->debug_base
-			+ CPUDBG_BVR_BASE + 4 * brp_list[brp_2].BRPn,
+			+ CPUDBG_BVR_BASE + 4 * brp_list[brp_2].brpn,
 			brp_list[brp_2].value);
 	if (retval != ERROR_OK)
 		return retval;
 	retval = cortex_a_dap_write_memap_register_u32(target, armv7a->debug_base
-			+ CPUDBG_BCR_BASE + 4 * brp_list[brp_2].BRPn,
+			+ CPUDBG_BCR_BASE + 4 * brp_list[brp_2].brpn,
 			brp_list[brp_2].control);
 	if (retval != ERROR_OK)
 		return retval;
@@ -1500,23 +1500,23 @@ static int cortex_a_unset_breakpoint(struct target *target, struct breakpoint *b
 	if (breakpoint->type == BKPT_HARD) {
 		if ((breakpoint->address != 0) && (breakpoint->asid != 0)) {
 			int brp_i = breakpoint->set - 1;
-			int brp_j = breakpoint->linked_BRP;
+			int brp_j = breakpoint->linked_brp;
 			if ((brp_i < 0) || (brp_i >= cortex_a->brp_num)) {
 				LOG_DEBUG("Invalid BRP number in breakpoint");
 				return ERROR_OK;
 			}
 			LOG_DEBUG("rbp %i control 0x%0" PRIx32 " value 0x%0" PRIx32, brp_i,
 				brp_list[brp_i].control, brp_list[brp_i].value);
-			brp_list[brp_i].used = 0;
+			brp_list[brp_i].used = false;
 			brp_list[brp_i].value = 0;
 			brp_list[brp_i].control = 0;
 			retval = cortex_a_dap_write_memap_register_u32(target, armv7a->debug_base
-					+ CPUDBG_BCR_BASE + 4 * brp_list[brp_i].BRPn,
+					+ CPUDBG_BCR_BASE + 4 * brp_list[brp_i].brpn,
 					brp_list[brp_i].control);
 			if (retval != ERROR_OK)
 				return retval;
 			retval = cortex_a_dap_write_memap_register_u32(target, armv7a->debug_base
-					+ CPUDBG_BVR_BASE + 4 * brp_list[brp_i].BRPn,
+					+ CPUDBG_BVR_BASE + 4 * brp_list[brp_i].brpn,
 					brp_list[brp_i].value);
 			if (retval != ERROR_OK)
 				return retval;
@@ -1526,20 +1526,20 @@ static int cortex_a_unset_breakpoint(struct target *target, struct breakpoint *b
 			}
 			LOG_DEBUG("rbp %i control 0x%0" PRIx32 " value 0x%0" PRIx32, brp_j,
 				brp_list[brp_j].control, brp_list[brp_j].value);
-			brp_list[brp_j].used = 0;
+			brp_list[brp_j].used = false;
 			brp_list[brp_j].value = 0;
 			brp_list[brp_j].control = 0;
 			retval = cortex_a_dap_write_memap_register_u32(target, armv7a->debug_base
-					+ CPUDBG_BCR_BASE + 4 * brp_list[brp_j].BRPn,
+					+ CPUDBG_BCR_BASE + 4 * brp_list[brp_j].brpn,
 					brp_list[brp_j].control);
 			if (retval != ERROR_OK)
 				return retval;
 			retval = cortex_a_dap_write_memap_register_u32(target, armv7a->debug_base
-					+ CPUDBG_BVR_BASE + 4 * brp_list[brp_j].BRPn,
+					+ CPUDBG_BVR_BASE + 4 * brp_list[brp_j].brpn,
 					brp_list[brp_j].value);
 			if (retval != ERROR_OK)
 				return retval;
-			breakpoint->linked_BRP = 0;
+			breakpoint->linked_brp = 0;
 			breakpoint->set = 0;
 			return ERROR_OK;
 
@@ -1551,16 +1551,16 @@ static int cortex_a_unset_breakpoint(struct target *target, struct breakpoint *b
 			}
 			LOG_DEBUG("rbp %i control 0x%0" PRIx32 " value 0x%0" PRIx32, brp_i,
 				brp_list[brp_i].control, brp_list[brp_i].value);
-			brp_list[brp_i].used = 0;
+			brp_list[brp_i].used = false;
 			brp_list[brp_i].value = 0;
 			brp_list[brp_i].control = 0;
 			retval = cortex_a_dap_write_memap_register_u32(target, armv7a->debug_base
-					+ CPUDBG_BCR_BASE + 4 * brp_list[brp_i].BRPn,
+					+ CPUDBG_BCR_BASE + 4 * brp_list[brp_i].brpn,
 					brp_list[brp_i].control);
 			if (retval != ERROR_OK)
 				return retval;
 			retval = cortex_a_dap_write_memap_register_u32(target, armv7a->debug_base
-					+ CPUDBG_BVR_BASE + 4 * brp_list[brp_i].BRPn,
+					+ CPUDBG_BVR_BASE + 4 * brp_list[brp_i].brpn,
 					brp_list[brp_i].value);
 			if (retval != ERROR_OK)
 				return retval;
@@ -1672,132 +1672,238 @@ static int cortex_a_remove_breakpoint(struct target *target, struct breakpoint *
 	return ERROR_OK;
 }
 
+/**
+ * Sets a watchpoint for an Cortex-A target in one of the watchpoint units.  It is
+ * considered a bug to call this function when there are no available watchpoint
+ * units.
+ *
+ * @param target Pointer to an Cortex-A target to set a watchpoint on
+ * @param watchpoint Pointer to the watchpoint to be set
+ * @return Error status if watchpoint set fails or the result of executing the
+ * JTAG queue
+ */
+static int cortex_a_set_watchpoint(struct target *target, struct watchpoint *watchpoint)
+{
+	int retval = ERROR_OK;
+	int wrp_i = 0;
+	uint32_t control;
+	uint32_t address;
+	uint8_t address_mask;
+	uint8_t byte_address_select;
+	uint8_t load_store_access_control = 0x3;
+	struct cortex_a_common *cortex_a = target_to_cortex_a(target);
+	struct armv7a_common *armv7a = &cortex_a->armv7a_common;
+	struct cortex_a_wrp *wrp_list = cortex_a->wrp_list;
+
+	if (watchpoint->set) {
+		LOG_WARNING("watchpoint already set");
+		return retval;
+	}
+
+	/* check available context WRPs */
+	while (wrp_list[wrp_i].used && (wrp_i < cortex_a->wrp_num))
+		wrp_i++;
+
+	if (wrp_i >= cortex_a->wrp_num) {
+		LOG_ERROR("ERROR Can not find free Watchpoint Register Pair");
+		return ERROR_FAIL;
+	}
+
+	if (watchpoint->length == 0 || watchpoint->length > 0x80000000U ||
+			(watchpoint->length & (watchpoint->length - 1))) {
+		LOG_WARNING("watchpoint length must be a power of 2");
+		return ERROR_FAIL;
+	}
+
+	if (watchpoint->address & (watchpoint->length - 1)) {
+		LOG_WARNING("watchpoint address must be aligned at length");
+		return ERROR_FAIL;
+	}
+
+	/* FIXME: ARM DDI 0406C: address_mask is optional. What to do if it's missing?  */
+	/* handle wp length 1 and 2 through byte select */
+	switch (watchpoint->length) {
+	case 1:
+		byte_address_select = BIT(watchpoint->address & 0x3);
+		address = watchpoint->address & ~0x3;
+		address_mask = 0;
+		break;
+
+	case 2:
+		byte_address_select = 0x03 << (watchpoint->address & 0x2);
+		address = watchpoint->address & ~0x3;
+		address_mask = 0;
+		break;
+
+	case 4:
+		byte_address_select = 0x0f;
+		address = watchpoint->address;
+		address_mask = 0;
+		break;
+
+	default:
+		byte_address_select = 0xff;
+		address = watchpoint->address;
+		address_mask = ilog2(watchpoint->length);
+		break;
+	}
+
+	watchpoint->set = wrp_i + 1;
+	control = (address_mask << 24) |
+		(byte_address_select << 5) |
+		(load_store_access_control << 3) |
+		(0x3 << 1) | 1;
+	wrp_list[wrp_i].used = true;
+	wrp_list[wrp_i].value = address;
+	wrp_list[wrp_i].control = control;
+
+	retval = cortex_a_dap_write_memap_register_u32(target, armv7a->debug_base
+			+ CPUDBG_WVR_BASE + 4 * wrp_list[wrp_i].wrpn,
+			wrp_list[wrp_i].value);
+	if (retval != ERROR_OK)
+		return retval;
+
+	retval = cortex_a_dap_write_memap_register_u32(target, armv7a->debug_base
+			+ CPUDBG_WCR_BASE + 4 * wrp_list[wrp_i].wrpn,
+			wrp_list[wrp_i].control);
+	if (retval != ERROR_OK)
+		return retval;
+
+	LOG_DEBUG("wp %i control 0x%0" PRIx32 " value 0x%0" PRIx32, wrp_i,
+			wrp_list[wrp_i].control,
+			wrp_list[wrp_i].value);
+
+	return ERROR_OK;
+}
+
+/**
+ * Unset an existing watchpoint and clear the used watchpoint unit.
+ *
+ * @param target Pointer to the target to have the watchpoint removed
+ * @param watchpoint Pointer to the watchpoint to be removed
+ * @return Error status while trying to unset the watchpoint or the result of
+ *         executing the JTAG queue
+ */
+static int cortex_a_unset_watchpoint(struct target *target, struct watchpoint *watchpoint)
+{
+	int retval;
+	struct cortex_a_common *cortex_a = target_to_cortex_a(target);
+	struct armv7a_common *armv7a = &cortex_a->armv7a_common;
+	struct cortex_a_wrp *wrp_list = cortex_a->wrp_list;
+
+	if (!watchpoint->set) {
+		LOG_WARNING("watchpoint not set");
+		return ERROR_OK;
+	}
+
+	int wrp_i = watchpoint->set - 1;
+	if (wrp_i < 0 || wrp_i >= cortex_a->wrp_num) {
+		LOG_DEBUG("Invalid WRP number in watchpoint");
+		return ERROR_OK;
+	}
+	LOG_DEBUG("wrp %i control 0x%0" PRIx32 " value 0x%0" PRIx32, wrp_i,
+			wrp_list[wrp_i].control, wrp_list[wrp_i].value);
+	wrp_list[wrp_i].used = false;
+	wrp_list[wrp_i].value = 0;
+	wrp_list[wrp_i].control = 0;
+	retval = cortex_a_dap_write_memap_register_u32(target, armv7a->debug_base
+			+ CPUDBG_WCR_BASE + 4 * wrp_list[wrp_i].wrpn,
+			wrp_list[wrp_i].control);
+	if (retval != ERROR_OK)
+		return retval;
+	retval = cortex_a_dap_write_memap_register_u32(target, armv7a->debug_base
+			+ CPUDBG_WVR_BASE + 4 * wrp_list[wrp_i].wrpn,
+			wrp_list[wrp_i].value);
+	if (retval != ERROR_OK)
+		return retval;
+	watchpoint->set = 0;
+
+	return ERROR_OK;
+}
+
+/**
+ * Add a watchpoint to an Cortex-A target.  If there are no watchpoint units
+ * available, an error response is returned.
+ *
+ * @param target Pointer to the Cortex-A target to add a watchpoint to
+ * @param watchpoint Pointer to the watchpoint to be added
+ * @return Error status while trying to add the watchpoint
+ */
+static int cortex_a_add_watchpoint(struct target *target, struct watchpoint *watchpoint)
+{
+	struct cortex_a_common *cortex_a = target_to_cortex_a(target);
+
+	if (cortex_a->wrp_num_available < 1) {
+		LOG_INFO("no hardware watchpoint available");
+		return ERROR_TARGET_RESOURCE_NOT_AVAILABLE;
+	}
+
+	int retval = cortex_a_set_watchpoint(target, watchpoint);
+	if (retval != ERROR_OK)
+		return retval;
+
+	cortex_a->wrp_num_available--;
+	return ERROR_OK;
+}
+
+/**
+ * Remove a watchpoint from an Cortex-A target.  The watchpoint will be unset and
+ * the used watchpoint unit will be reopened.
+ *
+ * @param target Pointer to the target to remove a watchpoint from
+ * @param watchpoint Pointer to the watchpoint to be removed
+ * @return Result of trying to unset the watchpoint
+ */
+static int cortex_a_remove_watchpoint(struct target *target, struct watchpoint *watchpoint)
+{
+	struct cortex_a_common *cortex_a = target_to_cortex_a(target);
+
+	if (watchpoint->set) {
+		cortex_a->wrp_num_available++;
+		cortex_a_unset_watchpoint(target, watchpoint);
+	}
+	return ERROR_OK;
+}
+
+
 /*
  * Cortex-A Reset functions
  */
 
 static int cortex_a_assert_reset(struct target *target)
 {
-	int retval;
 	struct armv7a_common *armv7a = target_to_armv7a(target);
 
 	LOG_DEBUG(" ");
 
-	/* Issue some kind of warm reset. */
-	if (target_has_event_action(target, TARGET_EVENT_RESET_ASSERT)) {
-		/* allow scripts to override the reset event */
-
-		target_handle_event(target, TARGET_EVENT_RESET_ASSERT);
-		register_cache_invalidate(armv7a->arm.core_cache);
-		target->state = TARGET_RESET;
-
-		return ERROR_OK;
-	}
+	/* FIXME when halt is requested, make it work somehow... */
 
 	/* This function can be called in "target not examined" state */
-	if (!target_was_examined(target))
-		return ERROR_OK;
 
-	/* Some cores support connecting while srst is asserted
-	 * use that mode if it has been configured - That way we can
-	 * be sure the JTAG pins will be usable (not set to GPIOs)
-	 */
-
-	bool srst_asserted = false;
-
-	enum reset_types jtag_reset_config = jtag_get_reset_config();
-
-	if ((jtag_reset_config & RESET_HAS_SRST) &&
-		(jtag_reset_config & RESET_SRST_NO_GATING)) {
-		adapter_assert_reset();
-		srst_asserted = true;
-	}
-
-	if (!target->reset_halt) {
-		uint32_t vcr;
-
-		/* Reset without halt */
-		/* clear the reset vector catch */
-		retval = mem_ap_read_atomic_u32(armv7a->debug_ap,
-				armv7a->debug_base + CPUDBG_VCR, &vcr);
-		if (retval != ERROR_OK)
-			return retval;
-		retval = mem_ap_write_atomic_u32(armv7a->debug_ap,
-				armv7a->debug_base + CPUDBG_VCR, vcr & (~VCR_RESET));
-		if (retval != ERROR_OK)
-			return retval;
-
-		/* Set restart bit in DRCR to ensure resume processor resumes if it was currently halted */
-		retval = mem_ap_write_atomic_u32(armv7a->debug_ap,
-				armv7a->debug_base + CPUDBG_DRCR, DRCR_RESTART);
-		if (retval != ERROR_OK)
-			return retval;
-
-	} else {
-		uint32_t vcr;
-		uint32_t dscr;
+	/* Issue some kind of warm reset. */
+	if (target_has_event_action(target, TARGET_EVENT_RESET_ASSERT))
+		target_handle_event(target, TARGET_EVENT_RESET_ASSERT);
+	else if (jtag_get_reset_config() & RESET_HAS_SRST) {
+		/* REVISIT handle "pulls" cases, if there's
+		 * hardware that needs them to work.
+		 */
 
 		/*
-		 * enter halting debug mode
+		 * FIXME: fix reset when transport is not JTAG. This is a temporary
+		 * work-around for release v0.10 that is not intended to stay!
 		 */
-		retval = mem_ap_read_atomic_u32(armv7a->debug_ap,
-				armv7a->debug_base + CPUDBG_DSCR, &dscr);
-		if (retval != ERROR_OK)
-			return retval;
-
-		retval = mem_ap_write_atomic_u32(armv7a->debug_ap,
-				armv7a->debug_base + CPUDBG_DSCR, dscr | DSCR_HALT_DBG_MODE);
-		if (retval != ERROR_OK)
-			return retval;
-
-		/* set the reset vector catch */
-		retval = mem_ap_read_atomic_u32(armv7a->debug_ap,
-				armv7a->debug_base + CPUDBG_VCR, &vcr);
-		if (retval != ERROR_OK)
-			return retval;
-		retval = mem_ap_write_atomic_u32(armv7a->debug_ap,
-				armv7a->debug_base + CPUDBG_VCR, vcr | VCR_RESET);
-		if (retval != ERROR_OK)
-			return retval;
-
-		/*
-		 * Tell the core to be halted by writing DRCR with 0x1
-		 */
-		retval = mem_ap_write_atomic_u32(armv7a->debug_ap,
-				armv7a->debug_base + CPUDBG_DRCR, DRCR_HALT);
-		if (retval != ERROR_OK)
-			return retval;
-	}
-
-	if (jtag_reset_config & RESET_HAS_SRST) {
-			/* default to asserting srst */
-			if (!srst_asserted)
-				adapter_assert_reset(); /* Assert reset when SRST gates JTAG */
+		if (!transport_is_jtag() ||
+				(target->reset_halt && (jtag_get_reset_config() & RESET_SRST_NO_GATING)))
+			adapter_assert_reset();
 
 	} else {
-		/* No SRST available - attempt to use warm reset */
-
-		LOG_DEBUG("%s: Executing a warm reset", target_name(target));
-		/* Hold processor in warm reset */
-		retval = mem_ap_write_atomic_u32(armv7a->debug_ap,
-				armv7a->debug_base + CPUDBG_PRCR, PRCR_WARM_RESET | PRCR_HOLD_NON_DEBUG_RESET);
-		if (retval != ERROR_OK)
-			return retval;
-	}
-
-		/* Read the Reset Status bit to determine whether core is currently in reset as required */
-		uint32_t prsr;
-		retval = mem_ap_read_atomic_u32(armv7a->debug_ap,
-				armv7a->debug_base + CPUDBG_PRSR, &prsr);
-		if (retval != ERROR_OK)
-			return retval;
-		if ((prsr & (PRSR_RESET_STATUS | PRSR_POWERUP_STATUS)) != (PRSR_RESET_STATUS | PRSR_POWERUP_STATUS)) {
-			LOG_ERROR("Error %s: Reset was not successfully asserted", target_name(target));
-			return ERROR_FAIL;
+		LOG_ERROR("%s: how to reset?", target_name(target));
+		return ERROR_FAIL;
 	}
 
 	/* registers are now invalid */
-	register_cache_invalidate(armv7a->arm.core_cache);
+	if (target_was_examined(target))
+		register_cache_invalidate(armv7a->arm.core_cache);
 
 	target->state = TARGET_RESET;
 
@@ -1806,60 +1912,23 @@ static int cortex_a_assert_reset(struct target *target)
 
 static int cortex_a_deassert_reset(struct target *target)
 {
+	struct armv7a_common *armv7a = target_to_armv7a(target);
 	int retval;
 
 	LOG_DEBUG(" ");
 
-	/* This function can be called in "target not examined" state */
-	if (!target_was_examined(target))
-		return ERROR_OK;
-
-	/* be certain SRST is off (even for warm reset case)*/
+	/* be certain SRST is off */
 	adapter_deassert_reset();
 
-	enum reset_types jtag_reset_config = jtag_get_reset_config();
-
-	struct armv7a_common *armv7a = target_to_armv7a(target);
-
-	if (target->reset_halt) {
-		/* Target should now be halted due to vector-catch
-		 * which was set up in assert_reset
-		 */
-
-		uint32_t vcr;
-
-		LOG_DEBUG("%s: Clearing Reset Vector Catch ", target_name(target));
-
-		/* clear the reset vector-catch */
-		retval = mem_ap_read_atomic_u32(armv7a->debug_ap,
-				armv7a->debug_base + CPUDBG_VCR, &vcr);
+	if (target_was_examined(target)) {
+		retval = cortex_a_poll(target);
 		if (retval != ERROR_OK)
 			return retval;
-		retval = mem_ap_write_atomic_u32(armv7a->debug_ap,
-				armv7a->debug_base + CPUDBG_VCR, vcr & (~VCR_RESET));
-		if (retval != ERROR_OK)
-			return retval;
-
-		if (!(jtag_reset_config & RESET_HAS_SRST)) {
-			LOG_DEBUG("%s: Clearing warm reset", target_name(target));
-
-			/* Clear warm reset */
-			retval = mem_ap_write_atomic_u32(armv7a->debug_ap,
-					armv7a->debug_base + CPUDBG_PRCR, 0);
-
-			if (retval != ERROR_OK)
-				return retval;
-		}
 	}
 
-	retval = cortex_a_poll(target);
-	if (retval != ERROR_OK)
-		return retval;
-
-	/* Check the requested state was achieved */
 	if (target->reset_halt) {
 		if (target->state != TARGET_HALTED) {
-				LOG_WARNING("%s: ran after reset and before halt ...",
+			LOG_WARNING("%s: ran after reset and before halt ...",
 				target_name(target));
 			if (target_was_examined(target)) {
 				retval = mem_ap_write_atomic_u32(armv7a->debug_ap,
@@ -2638,7 +2707,7 @@ static int cortex_a_read_phys_memory(struct target *target,
 	if (!count || !buffer)
 		return ERROR_COMMAND_SYNTAX_ERROR;
 
-	LOG_DEBUG("Reading memory at real address " TARGET_ADDR_FMT "; size %" PRId32 "; count %" PRId32,
+	LOG_DEBUG("Reading memory at real address " TARGET_ADDR_FMT "; size %" PRIu32 "; count %" PRIu32,
 		address, size, count);
 
 	/* read memory through the CPU */
@@ -2655,7 +2724,7 @@ static int cortex_a_read_memory(struct target *target, target_addr_t address,
 	int retval;
 
 	/* cortex_a handles unaligned memory access */
-	LOG_DEBUG("Reading memory at address " TARGET_ADDR_FMT "; size %" PRId32 "; count %" PRId32,
+	LOG_DEBUG("Reading memory at address " TARGET_ADDR_FMT "; size %" PRIu32 "; count %" PRIu32,
 		address, size, count);
 
 	cortex_a_prep_memaccess(target, 0);
@@ -2674,7 +2743,7 @@ static int cortex_a_write_phys_memory(struct target *target,
 	if (!count || !buffer)
 		return ERROR_COMMAND_SYNTAX_ERROR;
 
-	LOG_DEBUG("Writing memory to real address " TARGET_ADDR_FMT "; size %" PRId32 "; count %" PRId32,
+	LOG_DEBUG("Writing memory to real address " TARGET_ADDR_FMT "; size %" PRIu32 "; count %" PRIu32,
 		address, size, count);
 
 	/* write memory through the CPU */
@@ -2691,7 +2760,7 @@ static int cortex_a_write_memory(struct target *target, target_addr_t address,
 	int retval;
 
 	/* cortex_a handles unaligned memory access */
-	LOG_DEBUG("Writing memory at address " TARGET_ADDR_FMT "; size %" PRId32 "; count %" PRId32,
+	LOG_DEBUG("Writing memory at address " TARGET_ADDR_FMT "; size %" PRIu32 "; count %" PRIu32,
 		address, size, count);
 
 	/* memory writes bypass the caches, must flush before writing */
@@ -2838,7 +2907,7 @@ static int cortex_a_examine_first(struct target *target)
 	armv7a->debug_ap->memaccess_tck = 80;
 
 	if (!target->dbgbase_set) {
-		uint32_t dbgbase;
+		target_addr_t dbgbase;
 		/* Get ROM Table base */
 		uint32_t apid;
 		int32_t coreidx = target->coreid;
@@ -2855,14 +2924,14 @@ static int cortex_a_examine_first(struct target *target)
 				  target->cmd_name);
 			return retval;
 		}
-		LOG_DEBUG("Detected core %" PRId32 " dbgbase: %08" PRIx32,
+		LOG_DEBUG("Detected core %" PRId32 " dbgbase: " TARGET_ADDR_FMT,
 			  target->coreid, armv7a->debug_base);
 	} else
 		armv7a->debug_base = target->dbgbase;
 
 	if ((armv7a->debug_base & (1UL<<31)) == 0)
 		LOG_WARNING("Debug base address for target %s has bit 31 set to 0. Access to debug registers will likely fail!\n"
-				"Please fix the target configuration.", target_name(target));
+			    "Please fix the target configuration.", target_name(target));
 
 	retval = mem_ap_read_atomic_u32(armv7a->debug_ap,
 			armv7a->debug_base + CPUDBG_DIDR, &didr);
@@ -2885,7 +2954,7 @@ static int cortex_a_examine_first(struct target *target)
 	cortex_a->cpuid = cpuid;
 
 	retval = mem_ap_read_atomic_u32(armv7a->debug_ap,
-					armv7a->debug_base + CPUDBG_PRSR, &dbg_osreg);
+				    armv7a->debug_base + CPUDBG_PRSR, &dbg_osreg);
 	if (retval != ERROR_OK)
 		return retval;
 	LOG_DEBUG("target->coreid %" PRId32 " DBGPRSR  0x%" PRIx32, target->coreid, dbg_osreg);
@@ -2964,17 +3033,31 @@ static int cortex_a_examine_first(struct target *target)
 	cortex_a->brp_list = calloc(cortex_a->brp_num, sizeof(struct cortex_a_brp));
 /*	cortex_a->brb_enabled = ????; */
 	for (i = 0; i < cortex_a->brp_num; i++) {
-		cortex_a->brp_list[i].used = 0;
+		cortex_a->brp_list[i].used = false;
 		if (i < (cortex_a->brp_num-cortex_a->brp_num_context))
 			cortex_a->brp_list[i].type = BRP_NORMAL;
 		else
 			cortex_a->brp_list[i].type = BRP_CONTEXT;
 		cortex_a->brp_list[i].value = 0;
 		cortex_a->brp_list[i].control = 0;
-		cortex_a->brp_list[i].BRPn = i;
+		cortex_a->brp_list[i].brpn = i;
 	}
 
 	LOG_DEBUG("Configured %i hw breakpoints", cortex_a->brp_num);
+
+	/* Setup Watchpoint Register Pairs */
+	cortex_a->wrp_num = ((didr >> 28) & 0x0F) + 1;
+	cortex_a->wrp_num_available = cortex_a->wrp_num;
+	free(cortex_a->wrp_list);
+	cortex_a->wrp_list = calloc(cortex_a->wrp_num, sizeof(struct cortex_a_wrp));
+	for (i = 0; i < cortex_a->wrp_num; i++) {
+		cortex_a->wrp_list[i].used = false;
+		cortex_a->wrp_list[i].value = 0;
+		cortex_a->wrp_list[i].control = 0;
+		cortex_a->wrp_list[i].wrpn = i;
+	}
+
+	LOG_DEBUG("Configured %i hw watchpoints", cortex_a->wrp_num);
 
 	/* select debug_ap as default */
 	swjdp->apsel = armv7a->debug_ap->ap_num;
@@ -3043,13 +3126,13 @@ static int cortex_a_target_create(struct target *target, Jim_Interp *interp)
 	struct cortex_a_common *cortex_a;
 	struct adiv5_private_config *pc;
 
-	if (target->private_config == NULL)
+	if (!target->private_config)
 		return ERROR_FAIL;
 
 	pc = (struct adiv5_private_config *)target->private_config;
 
 	cortex_a = calloc(1, sizeof(struct cortex_a_common));
-	if (cortex_a == NULL) {
+	if (!cortex_a) {
 		LOG_ERROR("Out of memory");
 		return ERROR_FAIL;
 	}
@@ -3070,7 +3153,7 @@ static int cortex_r4_target_create(struct target *target, Jim_Interp *interp)
 		return ERROR_FAIL;
 
 	cortex_a = calloc(1, sizeof(struct cortex_a_common));
-	if (cortex_a == NULL) {
+	if (!cortex_a) {
 		LOG_ERROR("Out of memory");
 		return ERROR_FAIL;
 	}
@@ -3098,6 +3181,7 @@ static void cortex_a_deinit_target(struct target *target)
 					dscr & ~DSCR_HALT_DBG_MODE);
 	}
 
+	free(cortex_a->wrp_list);
 	free(cortex_a->brp_list);
 	arm_free_reg_cache(dpm->arm);
 	free(dpm->dbp);
@@ -3146,7 +3230,7 @@ static int cortex_a_virt2phys(struct target *target,
 	if (retval != ERROR_OK)
 		return retval;
 	return armv7a_mmu_translate_va_pa(target, (uint32_t)virt,
-							phys, 1);
+						    phys, 1);
 }
 
 COMMAND_HANDLER(cortex_a_handle_cache_info_command)
@@ -3175,16 +3259,16 @@ COMMAND_HANDLER(handle_cortex_a_mask_interrupts_command)
 	struct target *target = get_current_target(CMD_CTX);
 	struct cortex_a_common *cortex_a = target_to_cortex_a(target);
 
-	static const Jim_Nvp nvp_maskisr_modes[] = {
+	static const struct jim_nvp nvp_maskisr_modes[] = {
 		{ .name = "off", .value = CORTEX_A_ISRMASK_OFF },
 		{ .name = "on", .value = CORTEX_A_ISRMASK_ON },
 		{ .name = NULL, .value = -1 },
 	};
-	const Jim_Nvp *n;
+	const struct jim_nvp *n;
 
 	if (CMD_ARGC > 0) {
-		n = Jim_Nvp_name2value_simple(nvp_maskisr_modes, CMD_ARGV[0]);
-		if (n->name == NULL) {
+		n = jim_nvp_name2value_simple(nvp_maskisr_modes, CMD_ARGV[0]);
+		if (!n->name) {
 			LOG_ERROR("Unknown parameter: %s - should be off or on", CMD_ARGV[0]);
 			return ERROR_COMMAND_SYNTAX_ERROR;
 		}
@@ -3192,7 +3276,7 @@ COMMAND_HANDLER(handle_cortex_a_mask_interrupts_command)
 		cortex_a->isrmasking_mode = n->value;
 	}
 
-	n = Jim_Nvp_value2name_simple(nvp_maskisr_modes, cortex_a->isrmasking_mode);
+	n = jim_nvp_value2name_simple(nvp_maskisr_modes, cortex_a->isrmasking_mode);
 	command_print(CMD, "cortex_a interrupt mask %s", n->name);
 
 	return ERROR_OK;
@@ -3203,22 +3287,22 @@ COMMAND_HANDLER(handle_cortex_a_dacrfixup_command)
 	struct target *target = get_current_target(CMD_CTX);
 	struct cortex_a_common *cortex_a = target_to_cortex_a(target);
 
-	static const Jim_Nvp nvp_dacrfixup_modes[] = {
+	static const struct jim_nvp nvp_dacrfixup_modes[] = {
 		{ .name = "off", .value = CORTEX_A_DACRFIXUP_OFF },
 		{ .name = "on", .value = CORTEX_A_DACRFIXUP_ON },
 		{ .name = NULL, .value = -1 },
 	};
-	const Jim_Nvp *n;
+	const struct jim_nvp *n;
 
 	if (CMD_ARGC > 0) {
-		n = Jim_Nvp_name2value_simple(nvp_dacrfixup_modes, CMD_ARGV[0]);
-		if (n->name == NULL)
+		n = jim_nvp_name2value_simple(nvp_dacrfixup_modes, CMD_ARGV[0]);
+		if (!n->name)
 			return ERROR_COMMAND_SYNTAX_ERROR;
 		cortex_a->dacrfixup_mode = n->value;
 
 	}
 
-	n = Jim_Nvp_value2name_simple(nvp_dacrfixup_modes, cortex_a->dacrfixup_mode);
+	n = jim_nvp_value2name_simple(nvp_dacrfixup_modes, cortex_a->dacrfixup_mode);
 	command_print(CMD, "cortex_a domain access control fixup %s", n->name);
 
 	return ERROR_OK;
@@ -3282,7 +3366,6 @@ static const struct command_registration cortex_a_command_handlers[] = {
 
 struct target_type cortexa_target = {
 	.name = "cortex_a",
-	.deprecated_name = "cortex_a8",
 
 	.poll = cortex_a_poll,
 	.arch_state = armv7a_arch_state,
@@ -3313,8 +3396,8 @@ struct target_type cortexa_target = {
 	.add_context_breakpoint = cortex_a_add_context_breakpoint,
 	.add_hybrid_breakpoint = cortex_a_add_hybrid_breakpoint,
 	.remove_breakpoint = cortex_a_remove_breakpoint,
-	.add_watchpoint = NULL,
-	.remove_watchpoint = NULL,
+	.add_watchpoint = cortex_a_add_watchpoint,
+	.remove_watchpoint = cortex_a_remove_watchpoint,
 
 	.commands = cortex_a_command_handlers,
 	.target_create = cortex_a_target_create,
@@ -3390,8 +3473,8 @@ struct target_type cortexr4_target = {
 	.add_context_breakpoint = cortex_a_add_context_breakpoint,
 	.add_hybrid_breakpoint = cortex_a_add_hybrid_breakpoint,
 	.remove_breakpoint = cortex_a_remove_breakpoint,
-	.add_watchpoint = NULL,
-	.remove_watchpoint = NULL,
+	.add_watchpoint = cortex_a_add_watchpoint,
+	.remove_watchpoint = cortex_a_remove_watchpoint,
 
 	.commands = cortex_r4_command_handlers,
 	.target_create = cortex_r4_target_create,

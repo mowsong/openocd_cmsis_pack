@@ -39,8 +39,9 @@
 #include "cortex_m.h"
 #include "arm_semihosting.h"
 #include "target_request.h"
+#include <rtt/rtt.h>
 
-#define savedDCRDR  dbgbase  /* FIXME: using target->dbgbase to preserve DCRDR */
+#define SAVED_DCRDR  dbgbase  /* FIXME: using target->dbgbase to preserve DCRDR */
 
 #define ARMV7M_SCS_DCRSR	DCB_DCRSR
 #define ARMV7M_SCS_DCRDR	DCB_DCRDR
@@ -53,48 +54,15 @@ static inline struct hl_interface_s *target_to_adapter(struct target *target)
 static int adapter_load_core_reg_u32(struct target *target,
 		uint32_t regsel, uint32_t *value)
 {
-	int retval;
 	struct hl_interface_s *adapter = target_to_adapter(target);
-
-	switch (regsel) {
-	case ARMV7M_R0 ... ARMV7M_PSP:
-	case ARMV7M_REGSEL_PMSK_BPRI_FLTMSK_CTRL:
-		/* read a normal core register */
-		retval = adapter->layout->api->read_reg(adapter->handle, regsel, value);
-		break;
-
-	default:
-		/* Floating-point Status and Registers */
-		retval = target_write_u32(target, ARMV7M_SCS_DCRSR, regsel);
-		if (retval != ERROR_OK)
-			return retval;
-		retval = target_read_u32(target, ARMV7M_SCS_DCRDR, value);
-	}
-
-	return retval;
+	return adapter->layout->api->read_reg(adapter->handle, regsel, value);
 }
 
 static int adapter_store_core_reg_u32(struct target *target,
 		uint32_t regsel, uint32_t value)
 {
-	int retval;
 	struct hl_interface_s *adapter = target_to_adapter(target);
-
-	switch (regsel) {
-	case ARMV7M_R0 ... ARMV7M_PSP:
-	case ARMV7M_REGSEL_PMSK_BPRI_FLTMSK_CTRL:
-		retval = adapter->layout->api->write_reg(adapter->handle, regsel, value);
-		break;
-
-	default:
-		/* Floating-point Status and Registers */
-		retval = target_write_u32(target, ARMV7M_SCS_DCRDR, value);
-		if (retval != ERROR_OK)
-			return retval;
-		retval = target_write_u32(target, ARMV7M_SCS_DCRSR, regsel | DCRSR_WnR);
-	}
-
-	return retval;
+	return adapter->layout->api->write_reg(adapter->handle, regsel, value);
 }
 
 static int adapter_examine_debug_reason(struct target *target)
@@ -113,12 +81,12 @@ static int hl_dcc_read(struct hl_interface_s *hl_if, uint8_t *value, uint8_t *ct
 	int retval = hl_if->layout->api->read_mem(hl_if->handle,
 			DCB_DCRDR, 1, sizeof(dcrdr), (uint8_t *)&dcrdr);
 	if (retval == ERROR_OK) {
-		*ctrl = (uint8_t)dcrdr;
-		*value = (uint8_t)(dcrdr >> 8);
+	    *ctrl = (uint8_t)dcrdr;
+	    *value = (uint8_t)(dcrdr >> 8);
 
-		LOG_DEBUG("data 0x%x ctrl 0x%x", *value, *ctrl);
+	    LOG_DEBUG("data 0x%x ctrl 0x%x", *value, *ctrl);
 
-		if (dcrdr & 1) {
+	    if (dcrdr & 1) {
 			/* write ack back to software dcc register
 			 * to signify we have read data */
 			/* atomically clear just the byte containing the busy bit */
@@ -197,8 +165,8 @@ static int hl_handle_target_request(void *priv)
 }
 
 static int adapter_init_arch_info(struct target *target,
-					   struct cortex_m_common *cortex_m,
-					   struct jtag_tap *tap)
+				       struct cortex_m_common *cortex_m,
+				       struct jtag_tap *tap)
 {
 	struct armv7m_common *armv7m;
 
@@ -211,7 +179,7 @@ static int adapter_init_arch_info(struct target *target,
 	armv7m->store_core_reg_u32 = adapter_store_core_reg_u32;
 
 	armv7m->examine_debug_reason = adapter_examine_debug_reason;
-	armv7m->stlink = true;
+	armv7m->is_hla_target = true;
 
 	target_register_timer_callback(hl_handle_target_request, 1,
 		TARGET_TIMER_TYPE_PERIODIC, target);
@@ -220,7 +188,7 @@ static int adapter_init_arch_info(struct target *target,
 }
 
 static int adapter_init_target(struct command_context *cmd_ctx,
-					struct target *target)
+				    struct target *target)
 {
 	LOG_DEBUG("%s", __func__);
 
@@ -234,13 +202,13 @@ static int adapter_target_create(struct target *target,
 {
 	LOG_DEBUG("%s", __func__);
 	struct adiv5_private_config *pc = target->private_config;
-	if (pc != NULL && pc->ap_num > 0) {
+	if (pc && pc->ap_num > 0) {
 		LOG_ERROR("hla_target: invalid parameter -ap-num (> 0)");
 		return ERROR_COMMAND_SYNTAX_ERROR;
 	}
 
 	struct cortex_m_common *cortex_m = calloc(1, sizeof(struct cortex_m_common));
-	if (cortex_m == NULL) {
+	if (!cortex_m) {
 		LOG_ERROR("No memory creating target");
 		return ERROR_FAIL;
 	}
@@ -258,7 +226,7 @@ static int adapter_load_context(struct target *target)
 	for (int i = 0; i < num_regs; i++) {
 
 		struct reg *r = &armv7m->arm.core_cache->reg_list[i];
-		if (!r->valid && r->exist)
+		if (r->exist && !r->valid)
 			armv7m->arm.read_core_reg(target, r, i, ARM_MODE_ANY);
 	}
 
@@ -275,7 +243,7 @@ static int adapter_debug_entry(struct target *target)
 	int retval;
 
 	/* preserve the DCRDR across halts */
-	retval = target_read_u32(target, DCB_DCRDR, &target->savedDCRDR);
+	retval = target_read_u32(target, DCB_DCRDR, &target->SAVED_DCRDR);
 	if (retval != ERROR_OK)
 		return retval;
 
@@ -299,7 +267,7 @@ static int adapter_debug_entry(struct target *target)
 		arm->map = armv7m_msp_reg_map;
 	} else {
 		unsigned control = buf_get_u32(arm->core_cache
-				->reg_list[ARMV7M_CONTROL].value, 0, 2);
+				->reg_list[ARMV7M_CONTROL].value, 0, 3);
 
 		/* is this thread privileged? */
 		arm->core_mode = control & 1
@@ -437,7 +405,7 @@ static int hl_deassert_reset(struct target *target)
 	if (jtag_reset_config & RESET_HAS_SRST)
 		adapter_deassert_reset();
 
-	target->savedDCRDR = 0;  /* clear both DCC busy bits on initial resume */
+	target->SAVED_DCRDR = 0;  /* clear both DCC busy bits on initial resume */
 
 	return target->reset_halt ? ERROR_OK : target_resume(target, 1, 0, 0, 0);
 }
@@ -513,8 +481,8 @@ static int adapter_resume(struct target *target, int current,
 
 	armv7m_restore_context(target);
 
-	/* restore savedDCRDR */
-	res = target_write_u32(target, DCB_DCRDR, target->savedDCRDR);
+	/* restore SAVED_DCRDR */
+	res = target_write_u32(target, DCB_DCRDR, target->SAVED_DCRDR);
 	if (res != ERROR_OK)
 		return res;
 
@@ -596,8 +564,8 @@ static int adapter_step(struct target *target, int current,
 
 	armv7m_restore_context(target);
 
-	/* restore savedDCRDR */
-	res = target_write_u32(target, DCB_DCRDR, target->savedDCRDR);
+	/* restore SAVED_DCRDR */
+	res = target_write_u32(target, DCB_DCRDR, target->SAVED_DCRDR);
 	if (res != ERROR_OK)
 		return res;
 
@@ -659,12 +627,19 @@ static const struct command_registration adapter_command_handlers[] = {
 	{
 		.chain = armv7m_trace_command_handlers,
 	},
+	{
+		.chain = rtt_target_command_handlers,
+	},
+	/* START_DEPRECATED_TPIU */
+	{
+		.chain = arm_tpiu_deprecated_command_handlers,
+	},
+	/* END_DEPRECATED_TPIU */
 	COMMAND_REGISTRATION_DONE
 };
 
 struct target_type hla_target = {
 	.name = "hla_target",
-	.deprecated_name = "stm32_stlink",
 
 	.init_target = adapter_init_target,
 	.deinit_target = cortex_m_deinit_target,

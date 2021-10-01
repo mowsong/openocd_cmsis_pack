@@ -30,8 +30,8 @@
  * Implements Tcl commands used to access NOR flash facilities.
  */
 
-COMMAND_HELPER(flash_command_get_bank_maybe_probe, unsigned name_index,
-		   struct flash_bank **bank, bool do_probe)
+static COMMAND_HELPER(flash_command_get_bank_maybe_probe, unsigned name_index,
+	       struct flash_bank **bank, bool do_probe)
 {
 	const char *name = CMD_ARGV[name_index];
 	int retval;
@@ -88,8 +88,7 @@ COMMAND_HANDLER(handle_flash_info_command)
 	if (retval != ERROR_OK)
 		return retval;
 
-	if (p != NULL) {
-		char buf[1024];
+	if (p) {
 		int num_blocks;
 		struct flash_sector *block_array;
 
@@ -100,7 +99,7 @@ COMMAND_HANDLER(handle_flash_info_command)
 
 		/* If the driver does not implement protection, we show the default
 		 * state of is_protected array - usually protection state unknown */
-		if (p->driver->protect_check == NULL) {
+		if (!p->driver->protect_check) {
 			retval = ERROR_FLASH_OPER_UNSUPPORTED;
 		} else {
 			/* We must query the hardware to avoid printing stale information! */
@@ -141,7 +140,7 @@ COMMAND_HANDLER(handle_flash_info_command)
 				protect_state = "protection state unknown";
 
 			command_print(CMD,
-				"\t#%3i: 0x%8.8" PRIx32 " (0x%" PRIx32 " %" PRIi32 "kB) %s",
+				"\t#%3i: 0x%8.8" PRIx32 " (0x%" PRIx32 " %" PRIu32 "kB) %s",
 				j,
 				block_array[j].offset,
 				block_array[j].size,
@@ -149,11 +148,11 @@ COMMAND_HANDLER(handle_flash_info_command)
 				protect_state);
 		}
 
-		if (p->driver->info != NULL) {
-			retval = p->driver->info(p, buf, sizeof(buf));
-			if (retval == ERROR_OK)
-				command_print(CMD, "%s", buf);
-			else
+		if (p->driver->info) {
+			/* Let the flash driver print extra custom info */
+			retval = p->driver->info(p, CMD);
+			command_print_sameline(CMD, "\n");
+			if (retval != ERROR_OK)
 				LOG_ERROR("error retrieving flash info");
 		}
 	}
@@ -196,7 +195,7 @@ COMMAND_HANDLER(handle_flash_erase_check_command)
 
 	struct flash_bank *p;
 	int retval = CALL_COMMAND_HANDLER(flash_command_get_bank, 0, &p);
-	if (ERROR_OK != retval)
+	if (retval != ERROR_OK)
 		return retval;
 
 	retval = p->driver->erase_check(p);
@@ -222,7 +221,7 @@ COMMAND_HANDLER(handle_flash_erase_check_command)
 
 		blank = false;
 		command_print(CMD,
-			"\t#%3i: 0x%8.8" PRIx32 " (0x%" PRIx32 " %" PRIi32 "kB) %s",
+			"\t#%3i: 0x%8.8" PRIx32 " (0x%" PRIx32 " %" PRIu32 "kB) %s",
 			j,
 			p->sectors[j].offset,
 			p->sectors[j].size,
@@ -287,9 +286,8 @@ COMMAND_HANDLER(handle_flash_erase_address_command)
 	if (retval == ERROR_OK)
 		retval = flash_erase_address_range(target, do_pad, address, length);
 
-	if ((ERROR_OK == retval) && (duration_measure(&bench) == ERROR_OK)) {
-		command_print(CMD, "erased address " TARGET_ADDR_FMT " (length %"
-				PRIi32 ")"
+	if ((retval == ERROR_OK) && (duration_measure(&bench) == ERROR_OK)) {
+		command_print(CMD, "erased address " TARGET_ADDR_FMT " (length %" PRIu32 ")"
 			" in %fs (%0.3f KiB/s)", address, length,
 			duration_elapsed(&bench), duration_kbps(&bench, length));
 	}
@@ -326,7 +324,7 @@ COMMAND_HANDLER(handle_flash_erase_command)
 
 	if (!(last <= (p->num_sectors - 1))) {
 		command_print(CMD, "ERROR: "
-			"last sector must be <= %" PRIu32,
+			"last sector must be <= %u",
 			p->num_sectors - 1);
 		return ERROR_FAIL;
 	}
@@ -336,7 +334,7 @@ COMMAND_HANDLER(handle_flash_erase_command)
 
 	retval = flash_driver_erase(p, first, last);
 
-	if ((ERROR_OK == retval) && (duration_measure(&bench) == ERROR_OK)) {
+	if ((retval == ERROR_OK) && (duration_measure(&bench) == ERROR_OK)) {
 		command_print(CMD, "erased sectors %" PRIu32 " "
 			"through %" PRIu32 " on flash bank %u "
 			"in %fs", first, last, p->bank_number, duration_elapsed(&bench));
@@ -384,7 +382,7 @@ COMMAND_HANDLER(handle_flash_protect_command)
 
 	if (!(last <= (uint32_t)(num_blocks - 1))) {
 		command_print(CMD, "ERROR: "
-			"last %s must be <= %" PRIu32,
+			"last %s must be <= %d",
 			(p->num_prot_blocks) ? "block" : "sector",
 			num_blocks - 1);
 		return ERROR_FAIL;
@@ -442,6 +440,58 @@ COMMAND_HANDLER(handle_flash_write_image_command)
 	duration_start(&bench);
 
 	if (CMD_ARGC >= 2) {
+		image.base_address_set = true;
+		COMMAND_PARSE_NUMBER(llong, CMD_ARGV[1], image.base_address);
+	} else {
+		image.base_address_set = false;
+		image.base_address = 0x0;
+	}
+
+	image.start_address_set = false;
+
+	retval = image_open(&image, CMD_ARGV[0], (CMD_ARGC == 3) ? CMD_ARGV[2] : NULL);
+	if (retval != ERROR_OK)
+		return retval;
+
+	retval = flash_write_unlock_verify(target, &image, &written, auto_erase,
+		auto_unlock, true, false);
+	if (retval != ERROR_OK) {
+		image_close(&image);
+		return retval;
+	}
+
+	if ((retval == ERROR_OK) && (duration_measure(&bench) == ERROR_OK)) {
+		command_print(CMD, "wrote %" PRIu32 " bytes from file %s "
+			"in %fs (%0.3f KiB/s)", written, CMD_ARGV[0],
+			duration_elapsed(&bench), duration_kbps(&bench, written));
+	}
+
+	image_close(&image);
+
+	return retval;
+}
+
+COMMAND_HANDLER(handle_flash_verify_image_command)
+{
+	struct target *target = get_current_target(CMD_CTX);
+
+	struct image image;
+	uint32_t verified;
+
+	int retval;
+
+	if (CMD_ARGC < 1)
+		return ERROR_COMMAND_SYNTAX_ERROR;
+
+	if (!target) {
+		LOG_ERROR("no target selected");
+		return ERROR_FAIL;
+	}
+
+	struct duration bench;
+	duration_start(&bench);
+
+	if (CMD_ARGC >= 2) {
 		image.base_address_set = 1;
 		COMMAND_PARSE_NUMBER(llong, CMD_ARGV[1], image.base_address);
 	} else {
@@ -455,16 +505,17 @@ COMMAND_HANDLER(handle_flash_write_image_command)
 	if (retval != ERROR_OK)
 		return retval;
 
-	retval = flash_write_unlock(target, &image, &written, auto_erase, auto_unlock);
+	retval = flash_write_unlock_verify(target, &image, &verified, false,
+		false, false, true);
 	if (retval != ERROR_OK) {
 		image_close(&image);
 		return retval;
 	}
 
-	if ((ERROR_OK == retval) && (duration_measure(&bench) == ERROR_OK)) {
-		command_print(CMD, "wrote %" PRIu32 " bytes from file %s "
-			"in %fs (%0.3f KiB/s)", written, CMD_ARGV[0],
-			duration_elapsed(&bench), duration_kbps(&bench, written));
+	if ((retval == ERROR_OK) && (duration_measure(&bench) == ERROR_OK)) {
+		command_print(CMD, "verified %" PRIu32 " bytes from file %s "
+			"in %fs (%0.3f KiB/s)", verified, CMD_ARGV[0],
+			duration_elapsed(&bench), duration_kbps(&bench, verified));
 	}
 
 	image_close(&image);
@@ -533,7 +584,7 @@ COMMAND_HANDLER(handle_flash_fill_command)
 	uint32_t padding_at_end = aligned_end - end_addr;
 
 	uint8_t *buffer = malloc(aligned_size);
-	if (buffer == NULL)
+	if (!buffer)
 		return ERROR_FAIL;
 
 	if (padding_at_start) {
@@ -541,8 +592,8 @@ COMMAND_HANDLER(handle_flash_fill_command)
 		LOG_INFO("Start address " TARGET_ADDR_FMT
 			" breaks the required alignment of flash bank %s",
 			address, bank->name);
-		LOG_INFO("Padding %" PRId32 " bytes from " TARGET_ADDR_FMT,
-			padding_at_start, aligned_start);
+		LOG_WARNING("Padding %" PRIu32 " bytes from " TARGET_ADDR_FMT,
+		    padding_at_start, aligned_start);
 	}
 
 	uint8_t *ptr = buffer + padding_at_start;
@@ -571,7 +622,7 @@ COMMAND_HANDLER(handle_flash_fill_command)
 
 	if (padding_at_end) {
 		memset(ptr, bank->default_padded_value, padding_at_end);
-		LOG_INFO("Padding at " TARGET_ADDR_FMT " with %" PRId32
+		LOG_INFO("Padding at " TARGET_ADDR_FMT " with %" PRIu32
 			" bytes (bank write end alignment)",
 			end_addr + 1, padding_at_end);
 	}
@@ -882,7 +933,7 @@ COMMAND_HANDLER(handle_flash_md_command)
 	}
 
 	uint8_t *buffer = calloc(count, wordsize);
-	if (buffer == NULL) {
+	if (!buffer) {
 		command_print(CMD, "No memory for flash read buffer");
 		return ERROR_FAIL;
 	}
@@ -912,7 +963,7 @@ COMMAND_HANDLER(handle_flash_write_bank_command)
 
 	struct flash_bank *bank;
 	int retval = CALL_COMMAND_HANDLER(flash_command_get_bank, 0, &bank);
-	if (ERROR_OK != retval)
+	if (retval != ERROR_OK)
 		return retval;
 
 	offset = 0;
@@ -957,7 +1008,7 @@ COMMAND_HANDLER(handle_flash_write_bank_command)
 	uint32_t padding_at_end = aligned_end - end_addr;
 
 	buffer = malloc(aligned_size);
-	if (buffer == NULL) {
+	if (!buffer) {
 		fileio_close(fileio);
 		LOG_ERROR("Out of memory");
 		return ERROR_FAIL;
@@ -968,8 +1019,8 @@ COMMAND_HANDLER(handle_flash_write_bank_command)
 		LOG_INFO("Start offset 0x%08" PRIx32
 			" breaks the required alignment of flash bank %s",
 			offset, bank->name);
-		LOG_INFO("Padding %" PRId32 " bytes from " TARGET_ADDR_FMT,
-			padding_at_start, aligned_start);
+		LOG_WARNING("Padding %" PRIu32 " bytes from " TARGET_ADDR_FMT,
+		    padding_at_start, aligned_start);
 	}
 
 	uint8_t *ptr = buffer + padding_at_start;
@@ -990,7 +1041,7 @@ COMMAND_HANDLER(handle_flash_write_bank_command)
 
 	if (padding_at_end) {
 		memset(ptr, bank->default_padded_value, padding_at_end);
-		LOG_INFO("Padding at " TARGET_ADDR_FMT " with %" PRId32
+		LOG_INFO("Padding at " TARGET_ADDR_FMT " with %" PRIu32
 			" bytes (bank write end alignment)",
 			end_addr + 1, padding_at_end);
 	}
@@ -999,7 +1050,7 @@ COMMAND_HANDLER(handle_flash_write_bank_command)
 
 	free(buffer);
 
-	if ((ERROR_OK == retval) && (duration_measure(&bench) == ERROR_OK)) {
+	if ((retval == ERROR_OK) && (duration_measure(&bench) == ERROR_OK)) {
 		command_print(CMD, "wrote %zu bytes from file %s to flash bank %u"
 			" at offset 0x%8.8" PRIx32 " in %fs (%0.3f KiB/s)",
 			length, CMD_ARGV[1], bank->bank_number, offset,
@@ -1028,7 +1079,7 @@ COMMAND_HANDLER(handle_flash_read_bank_command)
 	struct flash_bank *p;
 	int retval = CALL_COMMAND_HANDLER(flash_command_get_bank, 0, &p);
 
-	if (ERROR_OK != retval)
+	if (retval != ERROR_OK)
 		return retval;
 
 	offset = 0;
@@ -1054,7 +1105,7 @@ COMMAND_HANDLER(handle_flash_read_bank_command)
 	}
 
 	buffer = malloc(length);
-	if (buffer == NULL) {
+	if (!buffer) {
 		LOG_ERROR("Out of memory");
 		return ERROR_FAIL;
 	}
@@ -1109,7 +1160,7 @@ COMMAND_HANDLER(handle_flash_verify_bank_command)
 
 	struct flash_bank *p;
 	int retval = CALL_COMMAND_HANDLER(flash_command_get_bank, 0, &p);
-	if (ERROR_OK != retval)
+	if (retval != ERROR_OK)
 		return retval;
 
 	offset = 0;
@@ -1148,7 +1199,7 @@ COMMAND_HANDLER(handle_flash_verify_bank_command)
 			"first %zu bytes of the file", length);
 
 	buffer_file = malloc(length);
-	if (buffer_file == NULL) {
+	if (!buffer_file) {
 		LOG_ERROR("Out of memory");
 		fileio_close(fileio);
 		return ERROR_FAIL;
@@ -1169,7 +1220,7 @@ COMMAND_HANDLER(handle_flash_verify_bank_command)
 	}
 
 	buffer_flash = malloc(length);
-	if (buffer_flash == NULL) {
+	if (!buffer_flash) {
 		LOG_ERROR("Out of memory");
 		free(buffer_file);
 		return ERROR_FAIL;
@@ -1197,7 +1248,7 @@ COMMAND_HANDLER(handle_flash_verify_bank_command)
 		for (t = 0; t < length; t++) {
 			if (buffer_flash[t] == buffer_file[t])
 				continue;
-			command_print(CMD, "diff %d address 0x%08x. Was 0x%02x instead of 0x%02x",
+			command_print(CMD, "diff %d address 0x%08" PRIx32 ". Was 0x%02x instead of 0x%02x",
 					diffs, t + offset, buffer_flash[t], buffer_file[t]);
 			if (diffs++ >= 127) {
 				command_print(CMD, "More than 128 errors, the rest are not printed.");
@@ -1230,7 +1281,7 @@ COMMAND_HANDLER(handle_flash_padded_value_command)
 
 	struct flash_bank *p;
 	int retval = CALL_COMMAND_HANDLER(flash_command_get_bank, 0, &p);
-	if (ERROR_OK != retval)
+	if (retval != ERROR_OK)
 		return retval;
 
 	COMMAND_PARSE_NUMBER(u8, CMD_ARGV[1], p->default_padded_value);
@@ -1380,7 +1431,15 @@ static const struct command_registration flash_exec_command_handlers[] = {
 		.mode = COMMAND_EXEC,
 		.usage = "[erase] [unlock] filename [offset [file_type]]",
 		.help = "Write an image to flash.  Optionally first unprotect "
-			"and/or erase the region to be used.  Allow optional "
+			"and/or erase the region to be used. Allow optional "
+			"offset from beginning of bank (defaults to zero)",
+	},
+	{
+		.name = "verify_image",
+		.handler = handle_flash_verify_image_command,
+		.mode = COMMAND_EXEC,
+		.usage = "filename [offset [file_type]]",
+		.help = "Verify an image against flash. Allow optional "
 			"offset from beginning of bank (defaults to zero)",
 	},
 	{
@@ -1425,8 +1484,7 @@ static int flash_init_drivers(struct command_context *cmd_ctx)
 	if (!flash_bank_list())
 		return ERROR_OK;
 
-	struct command *parent = command_find_in_context(cmd_ctx, "flash");
-	return register_commands(cmd_ctx, parent, flash_exec_command_handlers);
+	return register_commands(cmd_ctx, "flash", flash_exec_command_handlers);
 }
 
 COMMAND_HANDLER(handle_flash_bank_command)
@@ -1441,31 +1499,31 @@ COMMAND_HANDLER(handle_flash_bank_command)
 	CMD_ARGC--;
 
 	struct target *target = get_target(CMD_ARGV[5]);
-	if (target == NULL) {
+	if (!target) {
 		LOG_ERROR("target '%s' not defined", CMD_ARGV[5]);
 		return ERROR_FAIL;
 	}
 
 	const char *driver_name = CMD_ARGV[0];
 	const struct flash_driver *driver = flash_driver_find_by_name(driver_name);
-	if (NULL == driver) {
+	if (!driver) {
 		/* no matching flash driver found */
 		LOG_ERROR("flash driver '%s' not found", driver_name);
 		return ERROR_FAIL;
 	}
 
 	/* check the flash bank name is unique */
-	if (get_flash_bank_by_name_noprobe(bank_name) != NULL) {
+	if (get_flash_bank_by_name_noprobe(bank_name)) {
 		/* flash bank name already exists  */
 		LOG_ERROR("flash bank name '%s' already exists", bank_name);
 		return ERROR_FAIL;
 	}
 
 	/* register flash specific commands */
-	if (NULL != driver->commands) {
+	if (driver->commands) {
 		int retval = register_commands(CMD_CTX, NULL,
 				driver->commands);
-		if (ERROR_OK != retval) {
+		if (retval != ERROR_OK) {
 			LOG_ERROR("couldn't register '%s' commands",
 				driver_name);
 			return ERROR_FAIL;
@@ -1490,14 +1548,14 @@ COMMAND_HANDLER(handle_flash_bank_command)
 
 	int retval;
 	retval = CALL_COMMAND_HANDLER(driver->flash_bank_command, c);
-	if (ERROR_OK != retval) {
+	if (retval != ERROR_OK) {
 		LOG_ERROR("'%s' driver rejected flash bank at " TARGET_ADDR_FMT
 				"; usage: %s", driver_name, c->base, driver->usage);
 		free(c);
 		return retval;
 	}
 
-	if (driver->usage == NULL)
+	if (!driver->usage)
 		LOG_DEBUG("'%s' driver usage field missing", driver_name);
 
 	flash_bank_add(c);

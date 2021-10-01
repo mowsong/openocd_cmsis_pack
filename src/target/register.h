@@ -22,6 +22,9 @@
 #ifndef OPENOCD_TARGET_REGISTER_H
 #define OPENOCD_TARGET_REGISTER_H
 
+#include "helper/replacements.h"
+#include "helper/types.h"
+
 struct target;
 
 enum reg_type {
@@ -127,7 +130,7 @@ struct reg {
 	bool caller_save;
 	/* Pointer to place where the value is stored, in the format understood by
 	 * the binarybuffer.h functions. */
-	void *value;
+	uint8_t *value;
 	/* The stored value needs to be written to the target. */
 	bool dirty;
 	/* When true, value is valid. */

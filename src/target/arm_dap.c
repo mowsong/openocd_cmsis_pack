@@ -1,10 +1,6 @@
 /***************************************************************************
  *   Copyright (C) 2016 by Matthias Welwarsky                              *
  *                                                                         *
- *   Copyright (C) 2021 by Bohdan Tymkiv                                   *
- *   Copyright (C) 2021 by Infineon Technologies                           *
- *   bohdan.tymkiv@infineon.com bohdan200@gmail.com                        *
- *                                                                         *
  *   This program is free software; you can redistribute it and/or modify  *
  *   it under the terms of the GNU General Public License as published by  *
  *   the Free Software Foundation; either version 2 of the License, or     *
@@ -40,52 +36,12 @@ extern const struct dap_ops swd_dap_ops;
 extern const struct dap_ops jtag_dp_ops;
 extern struct adapter_driver *adapter_driver;
 
-enum dap_event {
-	DAP_EVENT_INIT_PRE,
-	DAP_EVENT_INIT_POST,
-	DAP_EVENT_INIT_FAIL,
-	DAP_EVENT_QUIT_PRE,
-	DAP_EVENT_QUIT_POST,
-};
-
-enum dap_cfg_param {
-	CFG_CHAIN_POSITION,
-	CFG_IGNORE_SYSPWRUPACK,
-	CFG_DAP_DORMANT_STATE,
-	CFG_DAP_EVENT,
-};
-
-static const Jim_Nvp nvp_config_opts[] = {
-	{ .name = "-chain-position",   .value = CFG_CHAIN_POSITION },
-	{ .name = "-ignore-syspwrupack", .value = CFG_IGNORE_SYSPWRUPACK },
-	{ .name = "-dormant-state", .value = CFG_DAP_DORMANT_STATE },
-	{ .name = "-event", .value = CFG_DAP_EVENT },
-	{ .name = NULL, .value = -1 }
-};
-
-static const Jim_Nvp nvp_dap_event[] = {
-	{ .value = DAP_EVENT_INIT_PRE,  .name = "init-pre" },
-	{ .value = DAP_EVENT_INIT_POST, .name = "init-post" },
-	{ .value = DAP_EVENT_INIT_FAIL, .name = "init-fail" },
-	{ .value = DAP_EVENT_QUIT_PRE,  .name = "quit-pre" },
-	{ .value = DAP_EVENT_QUIT_POST, .name = "quit-post" },
-	{ .name = NULL, .value = -1 }
-};
-
-struct dap_event_action {
-	enum dap_event event;
-	Jim_Interp *interp;
-	Jim_Obj *body;
-	struct dap_event_action *next;
-};
-
 /* DAP command support */
 struct arm_dap_object {
 	struct list_head lh;
 	struct adiv5_dap dap;
 	char *name;
 	const struct swd_driver *swd;
-	struct dap_event_action *event_action;
 };
 
 static void dap_instance_init(struct adiv5_dap *dap)
@@ -101,6 +57,7 @@ static void dap_instance_init(struct adiv5_dap *dap)
 		dap->ap[i].tar_autoincr_block = (1<<10);
 		/* default CSW value */
 		dap->ap[i].csw_default = CSW_AHB_DEFAULT;
+		dap->ap[i].cfg_reg = MEM_AP_REG_CFG_INVALID; /* mem_ap configuration reg (large physical addr, etc.) */
 	}
 	INIT_LIST_HEAD(&dap->cmd_journal);
 	INIT_LIST_HEAD(&dap->cmd_pool);
@@ -142,37 +99,6 @@ struct adiv5_dap *dap_instance_by_jim_obj(Jim_Interp *interp, Jim_Obj *o)
 	return NULL;
 }
 
-static void dap_handle_event(struct arm_dap_object *dap, enum dap_event e)
-{
-	struct dap_event_action *deap;
-	int retval;
-
-	for (deap = dap->event_action; deap != NULL; deap = deap->next) {
-		if (deap->event == e) {
-			LOG_DEBUG("dap '%s', event %d (%s), action: %s", adiv5_dap_name(&dap->dap), e,
-					Jim_Nvp_value2name_simple(nvp_dap_event, e)->name, Jim_GetString(deap->body, NULL));
-
-			retval = Jim_EvalObj(deap->interp, deap->body);
-
-			if (retval == ERROR_COMMAND_CLOSE_CONNECTION)
-				return;
-
-			if (retval == JIM_RETURN)
-				retval = deap->interp->returnCode;
-
-			if (retval != JIM_OK) {
-				Jim_MakeErrorMessage(deap->interp);
-				LOG_USER("Error executing event %s on target %s:\n%s",
-						  Jim_Nvp_value2name_simple(nvp_dap_event, e)->name,
-						  adiv5_dap_name(&dap->dap),
-						  Jim_GetString(Jim_GetResult(deap->interp), NULL));
-				/* clean both error code and stacktrace before return */
-				Jim_Eval(deap->interp, "error \"\" \"\"");
-			}
-		}
-	}
-}
-
 static int dap_init_all(void)
 {
 	struct arm_dap_object *obj;
@@ -201,22 +127,9 @@ static int dap_init_all(void)
 		} else
 			dap->ops = &jtag_dp_ops;
 
-		for(int i = 0; i < 3; i++) {
-			dap_handle_event(obj, DAP_EVENT_INIT_PRE);
-			retval = dap->ops->connect(dap);
-			if(retval == ERROR_OK) {
-				dap_handle_event(obj, DAP_EVENT_INIT_POST);
-				break;
-			}
-
-			dap_handle_event(obj, DAP_EVENT_INIT_FAIL);
-		}
-
-		if (retval != ERROR_OK) {
-			LOG_ERROR("DAP '%s' initialization failed (check connection, power, transport, DAP is enabled etc.)",
-					  dap->tap->dotted_name);
+		retval = dap->ops->connect(dap);
+		if (retval != ERROR_OK)
 			return retval;
-		}
 	}
 
 	return ERROR_OK;
@@ -229,22 +142,8 @@ int dap_cleanup_all(void)
 
 	list_for_each_entry_safe(obj, tmp, &all_dap, lh) {
 		dap = &obj->dap;
-
-		dap_handle_event(obj, DAP_EVENT_QUIT_PRE);
-
 		if (dap->ops && dap->ops->quit)
 			dap->ops->quit(dap);
-
-		dap_handle_event(obj, DAP_EVENT_QUIT_POST);
-
-		/* Free all event actions */
-		struct dap_event_action *deap = obj->event_action;
-		while (deap) {
-			struct dap_event_action *next = deap->next;
-			Jim_DecrRefCount(deap->interp, deap->body);
-			free(deap);
-			deap = next;
-		}
 
 		free(obj->name);
 		free(obj);
@@ -253,29 +152,40 @@ int dap_cleanup_all(void)
 	return ERROR_OK;
 }
 
-static int dap_configure(Jim_GetOptInfo *goi, struct arm_dap_object *dap)
+enum dap_cfg_param {
+	CFG_CHAIN_POSITION,
+	CFG_IGNORE_SYSPWRUPACK,
+};
+
+static const struct jim_nvp nvp_config_opts[] = {
+	{ .name = "-chain-position",   .value = CFG_CHAIN_POSITION },
+	{ .name = "-ignore-syspwrupack", .value = CFG_IGNORE_SYSPWRUPACK },
+	{ .name = NULL, .value = -1 }
+};
+
+static int dap_configure(struct jim_getopt_info *goi, struct arm_dap_object *dap)
 {
 	struct jtag_tap *tap = NULL;
-	Jim_Nvp *n;
+	struct jim_nvp *n;
 	int e;
 
 	/* parse config or cget options ... */
 	while (goi->argc > 0) {
 		Jim_SetEmptyResult(goi->interp);
 
-		e = Jim_GetOpt_Nvp(goi, nvp_config_opts, &n);
+		e = jim_getopt_nvp(goi, nvp_config_opts, &n);
 		if (e != JIM_OK) {
-			Jim_GetOpt_NvpUnknown(goi, nvp_config_opts, 0);
+			jim_getopt_nvp_unknown(goi, nvp_config_opts, 0);
 			return e;
 		}
 		switch (n->value) {
 		case CFG_CHAIN_POSITION: {
 			Jim_Obj *o_t;
-			e = Jim_GetOpt_Obj(goi, &o_t);
+			e = jim_getopt_obj(goi, &o_t);
 			if (e != JIM_OK)
 				return e;
 			tap = jtag_tap_by_jim_obj(goi->interp, o_t);
-			if (tap == NULL) {
+			if (!tap) {
 				Jim_SetResultString(goi->interp, "-chain-position is invalid", -1);
 				return JIM_ERR;
 			}
@@ -285,83 +195,12 @@ static int dap_configure(Jim_GetOptInfo *goi, struct arm_dap_object *dap)
 		case CFG_IGNORE_SYSPWRUPACK:
 			dap->dap.ignore_syspwrupack = true;
 			break;
-		case CFG_DAP_DORMANT_STATE:
-			dap->dap.dormant_state = true;
-			break;
-		case CFG_DAP_EVENT:
-			if (goi->argc == 0) {
-				Jim_WrongNumArgs(goi->interp, goi->argc, goi->argv, "-event ?event-name? ...");
-				return JIM_ERR;
-			}
-
-			e = Jim_GetOpt_Nvp(goi, nvp_dap_event, &n);
-			if (e != JIM_OK) {
-				Jim_GetOpt_NvpUnknown(goi, nvp_dap_event, 1);
-				return e;
-			}
-
-			if (goi->isconfigure) {
-				if (goi->argc != 1) {
-					Jim_WrongNumArgs(goi->interp, goi->argc, goi->argv, "-event ?event-name? ?EVENT-BODY?");
-					return JIM_ERR;
-				}
-			} else {
-				if (goi->argc != 0) {
-					Jim_WrongNumArgs(goi->interp, goi->argc, goi->argv, "-event ?event-name?");
-					return JIM_ERR;
-				}
-			}
-
-			struct dap_event_action *deap = dap->event_action;
-			/* replace existing? */
-			while (deap) {
-				if (deap->event == (enum dap_event)n->value)
-					break;
-				deap = deap->next;
-			}
-
-			if (goi->isconfigure) {
-				bool replace = true;
-				if (deap == NULL) {
-					/* create new */
-					deap = calloc(1, sizeof(*deap));
-					replace = false;
-				}
-				deap->event = n->value;
-				deap->interp = goi->interp;
-
-				Jim_Obj *o;
-				Jim_GetOpt_Obj(goi, &o);
-				if (deap->body)
-					Jim_DecrRefCount(deap->interp, deap->body);
-				deap->body  = Jim_DuplicateObj(goi->interp, o);
-
-				Jim_IncrRefCount(deap->body);
-
-				if (!replace) {
-					/* add to head of event list */
-					deap->next = dap->event_action;
-					dap->event_action = deap;
-				}
-				Jim_SetEmptyResult(goi->interp);
-			} else {
-				/* get */
-				if (deap == NULL)
-					Jim_SetEmptyResult(goi->interp);
-				else
-					Jim_SetResult(goi->interp, Jim_DuplicateObj(goi->interp, deap->body));
-			}
-
-			tap = dap->dap.tap;
-			/* loop for more */
-			break;
-
 		default:
 			break;
 		}
 	}
 
-	if (tap == NULL) {
+	if (!tap) {
 		Jim_SetResultString(goi->interp, "-chain-position required when creating DAP", -1);
 		return JIM_ERR;
 	}
@@ -372,44 +211,7 @@ static int dap_configure(Jim_GetOptInfo *goi, struct arm_dap_object *dap)
 	return JIM_OK;
 }
 
-static int jim_dap_configure(Jim_Interp *interp, int argc, Jim_Obj * const *argv)
-{
-	Jim_GetOptInfo goi;
-
-	Jim_GetOpt_Setup(&goi, interp, argc - 1, argv + 1);
-	goi.isconfigure = !strcmp(Jim_GetString(argv[0], NULL), "configure");
-	if (goi.argc < 1) {
-		Jim_WrongNumArgs(goi.interp, goi.argc, goi.argv,
-				 "missing: -option ...");
-		return JIM_ERR;
-	}
-
-	struct arm_dap_object *dap = Jim_CmdPrivData(goi.interp);
-	return dap_configure(&goi, dap);
-}
-
-static const struct command_registration dap_configure_commands[] = {
-	{
-		.name = "configure",
-		.mode = COMMAND_ANY,
-		.jim_handler = jim_dap_configure,
-		.usage = "",
-		.help = "Lists all registered DAP instances by name",
-	},
-	{
-		.name = "cget",
-		.mode = COMMAND_ANY,
-		.jim_handler = jim_dap_configure,
-		.usage = "",
-		.help = "Lists all registered DAP instances by name",
-	},
-	{
-		.chain = dap_instance_commands,
-	},
-	COMMAND_REGISTRATION_DONE
-};
-
-static int dap_create(Jim_GetOptInfo *goi)
+static int dap_create(struct jim_getopt_info *goi)
 {
 	struct command_context *cmd_ctx;
 	static struct arm_dap_object *dap;
@@ -419,14 +221,14 @@ static int dap_create(Jim_GetOptInfo *goi)
 	int e;
 
 	cmd_ctx = current_command_context(goi->interp);
-	assert(cmd_ctx != NULL);
+	assert(cmd_ctx);
 
 	if (goi->argc < 3) {
 		Jim_WrongNumArgs(goi->interp, 1, goi->argv, "?name? ..options...");
 		return JIM_ERR;
 	}
 	/* COMMAND */
-	Jim_GetOpt_Obj(goi, &new_cmd);
+	jim_getopt_obj(goi, &new_cmd);
 	/* does this command exist? */
 	cmd = Jim_GetCommand(goi->interp, new_cmd, JIM_ERRMSG);
 	if (cmd) {
@@ -437,7 +239,7 @@ static int dap_create(Jim_GetOptInfo *goi)
 
 	/* Create it */
 	dap = calloc(1, sizeof(struct arm_dap_object));
-	if (dap == NULL)
+	if (!dap)
 		return JIM_ERR;
 
 	e = dap_configure(goi, dap);
@@ -455,7 +257,7 @@ static int dap_create(Jim_GetOptInfo *goi)
 			.mode = COMMAND_ANY,
 			.help = "dap instance command group",
 			.usage = "",
-			.chain = dap_configure_commands,
+			.chain = dap_instance_commands,
 		},
 		COMMAND_REGISTRATION_DONE
 	};
@@ -464,23 +266,19 @@ static int dap_create(Jim_GetOptInfo *goi)
 	if (transport_is_hla())
 		dap_commands[0].chain = NULL;
 
-	e = register_commands(cmd_ctx, NULL, dap_commands);
-	if (ERROR_OK != e)
+	e = register_commands_with_data(cmd_ctx, NULL, dap_commands, dap);
+	if (e != ERROR_OK)
 		return JIM_ERR;
-
-	struct command *c = command_find_in_context(cmd_ctx, cp);
-	assert(c);
-	command_set_handler_data(c, dap);
 
 	list_add_tail(&dap->lh, &all_dap);
 
-	return (ERROR_OK == e) ? JIM_OK : JIM_ERR;
+	return JIM_OK;
 }
 
 static int jim_dap_create(Jim_Interp *interp, int argc, Jim_Obj *const *argv)
 {
-	Jim_GetOptInfo goi;
-	Jim_GetOpt_Setup(&goi, interp, argc - 1, argv + 1);
+	struct jim_getopt_info goi;
+	jim_getopt_setup(&goi, interp, argc - 1, argv + 1);
 	if (goi.argc < 2) {
 		Jim_WrongNumArgs(goi.interp, goi.argc, goi.argv,
 			"<name> [<dap_options> ...]");
@@ -517,7 +315,7 @@ COMMAND_HANDLER(handle_dap_info_command)
 	struct adiv5_dap *dap = arm->dap;
 	uint32_t apsel;
 
-	if (dap == NULL) {
+	if (!dap) {
 		LOG_ERROR("DAP instance not available. Probably a HLA target...");
 		return ERROR_TARGET_RESOURCE_NOT_AVAILABLE;
 	}

@@ -59,10 +59,13 @@ NOR_DRIVERS = \
 	%D%/psoc5lp.c \
 	%D%/sfdp.c \
 	%D%/renesas_rpchf.c \
+	%D%/rp2040.c \
+	%D%/sfdp.c \
 	%D%/sh_qspi.c \
 	%D%/sim3x.c \
 	%D%/spi.c \
 	%D%/stmsmi.c \
+	%D%/stmqspi.c \
 	%D%/stellaris.c \
 	%D%/stm32f1x.c \
 	%D%/stm32f2x.c \
@@ -94,6 +97,7 @@ NORHEADERS = \
 	%D%/sfdp.h \
 	%D%/spi.h \
 	%D%/stm32l4x.h \
+	%D%/stmqspi.h \
 	%D%/msp432.h
 
 include %D%/mxs40/Makefile.am

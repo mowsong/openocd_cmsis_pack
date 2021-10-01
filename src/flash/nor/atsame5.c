@@ -113,7 +113,7 @@ struct samd_part {
 };
 
 /* See SAM D5x/E5x Family Silicon Errata and Data Sheet Clarification
- * DS80000748B */
+ * DS80000748K */
 /* Known SAMD51 parts. */
 static const struct samd_part samd51_parts[] = {
 	{ 0x00, "SAMD51P20A", 1024, 256 },
@@ -134,6 +134,8 @@ static const struct samd_part same51_parts[] = {
 	{ 0x02, "SAME51J19A", 512, 192 },
 	{ 0x03, "SAME51J18A", 256, 128 },
 	{ 0x04, "SAME51J20A", 1024, 256 },
+	{ 0x05, "SAME51G19A", 512, 192 },	/* New in rev D */
+	{ 0x06, "SAME51G18A", 256, 128 },	/* New in rev D */
 };
 
 /* Known SAME53 parts. */
@@ -218,7 +220,7 @@ static const struct samd_part *samd_find_part(uint32_t id)
 {
 	uint8_t devsel = SAMD_GET_DEVSEL(id);
 	const struct samd_family *family = samd_find_family(id);
-	if (family == NULL)
+	if (!family)
 		return NULL;
 
 	for (unsigned i = 0; i < family->num_parts; i++) {
@@ -285,7 +287,7 @@ static int same5_probe(struct flash_bank *bank)
 	}
 
 	part = samd_find_part(id);
-	if (part == NULL) {
+	if (!part) {
 		LOG_ERROR("Couldn't find part corresponding to DID %08" PRIx32, id);
 		return ERROR_FAIL;
 	}
@@ -731,9 +733,7 @@ static int same5_write(struct flash_bank *bank, const uint8_t *buffer,
 	}
 
 free_pb:
-	if (pb)
-		free(pb);
-
+	free(pb);
 	return res;
 }
 
@@ -742,7 +742,7 @@ FLASH_BANK_COMMAND_HANDLER(same5_flash_bank_command)
 {
 	if (bank->base != SAMD_FLASH) {
 		LOG_ERROR("Address " TARGET_ADDR_FMT " invalid bank address (try "
-			"0x%08" PRIx32 "[same5] )", bank->base, SAMD_FLASH);
+			"0x%08x[same5] )", bank->base, SAMD_FLASH);
 		return ERROR_FAIL;
 	}
 

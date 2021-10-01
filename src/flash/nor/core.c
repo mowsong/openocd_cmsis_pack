@@ -70,7 +70,7 @@ int flash_driver_protect(struct flash_bank *bank, int set, unsigned int first,
 	/* force "set" to 0/1 */
 	set = !!set;
 
-	if (bank->driver->protect == NULL) {
+	if (!bank->driver->protect) {
 		LOG_ERROR("Flash protection is not supported.");
 		return ERROR_FLASH_OPER_UNSUPPORTED;
 	}
@@ -94,7 +94,7 @@ int flash_driver_protect(struct flash_bank *bank, int set, unsigned int first,
 }
 
 int flash_driver_write(struct flash_bank *bank,
-	uint8_t *buffer, uint32_t offset, uint32_t count)
+	const uint8_t *buffer, uint32_t offset, uint32_t count)
 {
 	int retval;
 
@@ -135,6 +135,43 @@ int default_flash_read(struct flash_bank *bank,
 	return target_read_buffer(bank->target, offset + bank->base, count, buffer);
 }
 
+int flash_driver_verify(struct flash_bank *bank,
+	const uint8_t *buffer, uint32_t offset, uint32_t count)
+{
+	int retval;
+
+	retval = bank->driver->verify ? bank->driver->verify(bank, buffer, offset, count) :
+		default_flash_verify(bank, buffer, offset, count);
+	if (retval != ERROR_OK) {
+		LOG_ERROR("verify failed in bank at " TARGET_ADDR_FMT " starting at 0x%8.8" PRIx32,
+			bank->base, offset);
+	}
+
+	return retval;
+}
+
+int default_flash_verify(struct flash_bank *bank,
+	const uint8_t *buffer, uint32_t offset, uint32_t count)
+{
+	uint32_t target_crc, image_crc;
+	int retval;
+
+	retval = image_calculate_checksum(buffer, count, &image_crc);
+	if (retval != ERROR_OK)
+		return retval;
+
+	retval = target_checksum_memory(bank->target, offset + bank->base, count, &target_crc);
+	if (retval != ERROR_OK)
+		return retval;
+
+	LOG_DEBUG("addr " TARGET_ADDR_FMT ", len 0x%08" PRIx32 ", crc 0x%08" PRIx32 " 0x%08" PRIx32,
+		offset + bank->base, count, ~image_crc, ~target_crc);
+	if (target_crc == image_crc)
+		return ERROR_OK;
+	else
+		return ERROR_FAIL;
+}
+
 void flash_bank_add(struct flash_bank *bank)
 {
 	/* put flash bank in linked list */
@@ -142,7 +179,7 @@ void flash_bank_add(struct flash_bank *bank)
 	if (flash_banks) {
 		/* find last flash bank */
 		struct flash_bank *p = flash_banks;
-		while (NULL != p->next) {
+		while (p->next) {
 			bank_num += 1;
 			p = p->next;
 		}
@@ -220,7 +257,7 @@ struct flash_bank *get_flash_bank_by_name_noprobe(const char *name)
 	unsigned found = 0;
 
 	struct flash_bank *bank;
-	for (bank = flash_banks; NULL != bank; bank = bank->next) {
+	for (bank = flash_banks; bank; bank = bank->next) {
 		if (strcmp(bank->name, name) == 0)
 			return bank;
 		if (!flash_driver_name_matches(bank->driver->name, name))
@@ -238,7 +275,7 @@ int get_flash_bank_by_name(const char *name, struct flash_bank **bank_result)
 	int retval;
 
 	bank = get_flash_bank_by_name_noprobe(name);
-	if (bank != NULL) {
+	if (bank) {
 		retval = bank->driver->auto_probe(bank);
 
 		if (retval != ERROR_OK) {
@@ -256,7 +293,7 @@ int get_flash_bank_by_num(unsigned int num, struct flash_bank **bank)
 	struct flash_bank *p = get_flash_bank_by_num_noprobe(num);
 	int retval;
 
-	if (p == NULL)
+	if (!p)
 		return ERROR_FAIL;
 
 	retval = p->driver->auto_probe(p);
@@ -308,7 +345,7 @@ static int default_flash_mem_blank_check(struct flash_bank *bank)
 {
 	struct target *target = bank->target;
 	const int buffer_size = 1024;
-	uint32_t nBytes;
+	uint32_t n_bytes;
 	int retval = ERROR_OK;
 
 	if (bank->target->state != TARGET_HALTED) {
@@ -337,8 +374,8 @@ static int default_flash_mem_blank_check(struct flash_bank *bank)
 			if (retval != ERROR_OK)
 				goto done;
 
-			for (nBytes = 0; nBytes < chunk; nBytes++) {
-				if (buffer[nBytes] != bank->erased_value) {
+			for (n_bytes = 0; n_bytes < chunk; n_bytes++) {
+				if (buffer[n_bytes] != bank->erased_value) {
 					bank->sectors[i].is_erased = 0;
 					break;
 				}
@@ -364,7 +401,7 @@ int default_flash_blank_check(struct flash_bank *bank)
 
 	struct target_memory_check_block *block_array;
 	block_array = malloc(bank->num_sectors * sizeof(struct target_memory_check_block));
-	if (block_array == NULL)
+	if (!block_array)
 		return default_flash_mem_blank_check(bank);
 
 	for (unsigned int i = 0; i < bank->num_sectors; i++) {
@@ -455,7 +492,7 @@ static int flash_iterate_address_range_inner(struct target *target,
 		return ERROR_FLASH_DST_BREAKS_ALIGNMENT;
 	}
 
-	if (c->prot_blocks == NULL || c->num_prot_blocks == 0) {
+	if (!c->prot_blocks || c->num_prot_blocks == 0) {
 		/* flash driver does not define protect blocks, use sectors instead */
 		iterate_protect_blocks = false;
 	}
@@ -698,12 +735,12 @@ static bool flash_write_check_gap(struct flash_bank *bank,
 }
 
 
-int flash_write_unlock(struct target *target, struct image *image,
-	uint32_t *written, bool erase, bool unlock)
+int flash_write_unlock_verify(struct target *target, struct image *image,
+	uint32_t *written, bool erase, bool unlock, bool write, bool verify)
 {
 	int retval = ERROR_OK;
 
-	int section;
+	unsigned int section;
 	uint32_t section_offset;
 	struct flash_bank *c;
 	int *padding;
@@ -728,8 +765,8 @@ int flash_write_unlock(struct target *target, struct image *image,
 	 * whereas an image can have sections out of order. */
 	struct imagesection **sections = malloc(sizeof(struct imagesection *) *
 			image->num_sections);
-	int i;
-	for (i = 0; i < image->num_sections; i++)
+
+	for (unsigned int i = 0; i < image->num_sections; i++)
 		sections[i] = &image->sections[i];
 
 	qsort(sections, image->num_sections, sizeof(struct imagesection *),
@@ -739,7 +776,7 @@ int flash_write_unlock(struct target *target, struct image *image,
 	while (section < image->num_sections) {
 		uint32_t buffer_idx;
 		uint8_t *buffer;
-		int section_last;
+		unsigned int section_last;
 		target_addr_t run_address = sections[section]->base_address + section_offset;
 		uint32_t run_size = sections[section]->size - section_offset;
 		int pad_bytes = 0;
@@ -755,8 +792,7 @@ int flash_write_unlock(struct target *target, struct image *image,
 		retval = get_flash_bank_by_addr(target, run_address, false, &c);
 		if (retval != ERROR_OK)
 			goto done;
-
-		if (c == NULL) {
+		if (!c) {
 			LOG_WARNING("no flash bank found for address " TARGET_ADDR_FMT, run_address);
 			section++;	/* and skip it */
 			section_offset = 0;
@@ -838,7 +874,7 @@ int flash_write_unlock(struct target *target, struct image *image,
 				LOG_INFO("Section start address " TARGET_ADDR_FMT
 					" breaks the required alignment of flash bank %s",
 					run_address, c->name);
-				LOG_INFO("Padding %d bytes from " TARGET_ADDR_FMT,
+				LOG_WARNING("Padding %" PRIu32 " bytes from " TARGET_ADDR_FMT,
 					padding_at_start, aligned_start);
 
 				run_address -= padding_at_start;
@@ -879,7 +915,7 @@ int flash_write_unlock(struct target *target, struct image *image,
 
 		/* allocate buffer */
 		buffer = malloc(run_size);
-		if (buffer == NULL) {
+		if (!buffer) {
 			LOG_ERROR("Out of memory for flash bank buffer");
 			retval = ERROR_FAIL;
 			goto done;
@@ -945,8 +981,17 @@ int flash_write_unlock(struct target *target, struct image *image,
 		}
 
 		if (retval == ERROR_OK) {
-			/* write flash sectors */
-			retval = flash_driver_write(c, buffer, run_address - c->base, run_size);
+			if (write) {
+				/* write flash sectors */
+				retval = flash_driver_write(c, buffer, run_address - c->base, run_size);
+			}
+		}
+
+		if (retval == ERROR_OK) {
+			if (verify) {
+				/* verify flash sectors */
+				retval = flash_driver_verify(c, buffer, run_address - c->base, run_size);
+			}
 		}
 
 		free(buffer);
@@ -956,7 +1001,7 @@ int flash_write_unlock(struct target *target, struct image *image,
 			goto done;
 		}
 
-		if (written != NULL)
+		if (written)
 			*written += run_size;	/* add run size to total written counter */
 	}
 
@@ -970,14 +1015,14 @@ done:
 int flash_write(struct target *target, struct image *image,
 	uint32_t *written, bool erase)
 {
-	return flash_write_unlock(target, image, written, erase, false);
+	return flash_write_unlock_verify(target, image, written, erase, false, true, false);
 }
 
 struct flash_sector *alloc_block_array(uint32_t offset, uint32_t size,
 		unsigned int num_blocks)
 {
 	struct flash_sector *array = calloc(num_blocks, sizeof(struct flash_sector));
-	if (array == NULL)
+	if (!array)
 		return NULL;
 
 	for (unsigned int i = 0; i < num_blocks; i++) {
