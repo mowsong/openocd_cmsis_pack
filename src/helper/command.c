@@ -46,9 +46,6 @@
 
 static bool g_local_echo = true;
 
-static int run_command(struct command_context *context,
-		struct command *c, const char *words[], unsigned num_words);
-
 struct log_capture_state {
 	Jim_Interp *interp;
 	Jim_Obj *output;
@@ -77,7 +74,7 @@ void *jimcmd_privdata(Jim_Cmd *cmd)
 	return cmd->isproc ? NULL : cmd->u.native.privData;
 }
 
-static void tcl_output(void *privData, const char *file, unsigned line,
+static void tcl_output(void *privData, enum log_levels level, const char *file, unsigned line,
 	const char *function, const char *string)
 {
 	struct log_capture_state *state = privData;

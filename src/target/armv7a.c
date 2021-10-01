@@ -307,6 +307,15 @@ static int armv7a_read_mpidr(struct target *target)
 	if (retval != ERROR_OK)
 		goto done;
 
+	/* ARMv7R uses a different format for MPIDR.
+	 * When configured uniprocessor (most R cores) it reads as 0.
+	 * This will need to be implemented for multiprocessor ARMv7R cores. */
+	if (armv7a->is_armv7r) {
+		if (mpidr)
+			LOG_ERROR("MPIDR nonzero in ARMv7-R target");
+		goto done;
+	}
+
 	/* Is register in Multiprocessing Extensions register format? */
 	if (mpidr & MPIDR_MP_EXT) {
 		LOG_DEBUG("%s: MPIDR 0x%" PRIx32, target_name(target), mpidr);

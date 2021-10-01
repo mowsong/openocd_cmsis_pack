@@ -17,6 +17,12 @@
  *   Copyright (C) 2013 by Spencer Oliver                                  *
  *   spen@spen-soft.co.uk                                                  *
  *                                                                         *
+ *   Copyright (C) 2021 by Bohdan Tymkiv                                   *
+ *   bohdan.tymkiv@infineon.com bohdan200@gmail.com                        *
+ *                                                                         *
+ *   Copyright (C) 2021                                                    *
+ *     <Cypress Semiconductor Corporation (an Infineon company)>           *
+ *                                                                         *
  *   This program is free software; you can redistribute it and/or modify  *
  *   it under the terms of the GNU General Public License as published by  *
  *   the Free Software Foundation; either version 2 of the License, or     *
@@ -39,6 +45,7 @@
 #include <libusb.h>
 #include <helper/log.h>
 #include <helper/replacements.h>
+#include <helper/time_support.h>
 
 #include "cmsis_dap.h"
 
@@ -329,6 +336,9 @@ static int cmsis_dap_usb_open(struct cmsis_dap *dap, uint16_t vids[], uint16_t p
 			LOG_INFO("Using CMSIS-DAPv2 interface with VID:PID=0x%04x:0x%04x, serial=%s",
 					dev_desc.idVendor, dev_desc.idProduct, dev_serial);
 
+			dap->vid = dev_desc.idVendor;
+			dap->pid = dev_desc.idProduct;
+
 			int current_config;
 			err = libusb_get_configuration(dev_handle, &current_config);
 			if (err) {
@@ -461,6 +471,221 @@ static int cmsis_dap_usb_alloc(struct cmsis_dap *dap, unsigned int pkt_sz)
 	return ERROR_OK;
 }
 
+/* Maximum number of transfers which have been submitted but did not reached
+ * the destination yet. In-flight transfers are effectively queued in the
+ * USB controller's driver so when any transfer completes the driver can submit
+ * next request immediately */
+#define MAX_INFLIGHT_REQUESTS 256
+
+/* Fixed pool of transfer structures. USB transfers are taken from the pool when
+ * they are submitted and returned to the pool upon completion for later reuse */
+static struct cmsis_dap_async_xfer {
+	struct libusb_transfer *xfer;
+	int completed;
+} cmsis_xfer_pool[MAX_INFLIGHT_REQUESTS];
+
+/* Queued error status. Since all OUT transfers are queued it is not possible to
+ * retrieve their execution status immediately. This information will be accessible
+ * later when completion callback is called. Errors are accumulated in this variable */
+static int queued_out_xfer_status;
+
+/* Temporary structure with various stats, to be removed in the future */
+static struct {
+	size_t in_fifo;
+	size_t in_flight;
+} stats;
+
+/** ***********************************************************************************************
+ * @brief Allocates new async transfer from the pool
+ * @param dap pointer to cmsis_dap object
+ * @return pointer to pool member with allocated async transfer
+ *************************************************************************************************/
+static struct cmsis_dap_async_xfer *cmsis_dap_alloc_xfer(struct cmsis_dap *dap)
+{
+	struct cmsis_dap_async_xfer *cmsis_xfer;
+	int64_t time_start = timeval_ms();
+
+	while (true) {
+		/* Loop through the pool, locate first unused descriptors */
+		for (size_t i = 0; i < MAX_INFLIGHT_REQUESTS; i++) {
+			cmsis_xfer = &cmsis_xfer_pool[i];
+
+			/* Exit the loop if free descriptor is found */
+			if (cmsis_xfer->xfer == NULL)
+				goto xfer_found;
+		}
+
+		/* There are no free transfer descriptors in the pool. This call will block until any pending
+		 * transfer is completed, associated transfer descriptor will be returned to the pool in the
+		 * completion callback */
+		libusb_handle_events(dap->bdata->usb_ctx);
+
+		/* Timeout here means there is a bug somewhere and descriptors are leaking */
+		if (timeval_ms() - time_start > 1000) {
+			LOG_ERROR("Timeout waiting for transfer completion, this should never happen");
+			return NULL;
+		}
+	}
+
+xfer_found:
+	/* Allocate new libusb_transfer structure, this takes the descriptor from the pool */
+	cmsis_xfer->xfer = libusb_alloc_transfer(0);
+	cmsis_xfer->completed = 0;
+	return cmsis_xfer;
+}
+
+/** ***********************************************************************************************
+ * @brief De-allocates completed async transfer and returns it to a pool for reuse
+ * @param cmsis_xfer pointer to pool object to de-allocate
+ * @param free_buffer if true, de-allocate data buffer associated with a transfer
+ *************************************************************************************************/
+static void cmsis_dap_free_xfer(struct cmsis_dap_async_xfer *cmsis_xfer, bool free_buffer)
+{
+	/* Free data buffer, if required */
+	if (free_buffer)
+		free(cmsis_xfer->xfer->buffer);
+
+	/* Free the libusb_transfer and return the descriptor back to the pool */
+	libusb_free_transfer(cmsis_xfer->xfer);
+	cmsis_xfer->xfer = NULL;
+}
+
+/** ***********************************************************************************************
+ * @brief Completion callback for async OUT transfers
+ * @param xfr pointer to completed async transfer
+ *************************************************************************************************/
+static void LIBUSB_CALL out_xfer_cb(struct libusb_transfer *xfr)
+{
+	struct cmsis_dap_async_xfer *cmsis_xfer = (struct cmsis_dap_async_xfer *)xfr->user_data;
+	assert(cmsis_xfer->xfer == xfr);
+
+	/* Accumulate errors from (possibly) multiple transactions, errors will be checked
+	 * in further cmsis_dap_usb_write_async() calls */
+	if (cmsis_xfer->xfer->status != LIBUSB_TRANSFER_COMPLETED)
+		queued_out_xfer_status = cmsis_xfer->xfer->status;
+
+	/* Data buffer is not needed anymore for OUT transfers, free the data and return
+	 * the descriptor to the pool */
+	cmsis_xfer->completed = 1;
+	cmsis_dap_free_xfer(cmsis_xfer, true);
+
+	stats.in_flight--;
+	stats.in_fifo++;
+}
+
+/** ***********************************************************************************************
+ * @brief Allocates and submits async OUT transfer
+ * @param dap pointer to cmsis_dap object
+ * @param txlen number of bytes to transmit
+ * @param timeout_ms transfer timeout
+ * @return ERROR_OK in case of success, ERROR_XXX code otherwise
+ *************************************************************************************************/
+static int cmsis_dap_usb_write_async(struct cmsis_dap *dap, int txlen, int timeout_ms)
+{
+	/* Check for any errors in already completed OUT transfers */
+	if (queued_out_xfer_status != LIBUSB_TRANSFER_COMPLETED) {
+		queued_out_xfer_status = LIBUSB_TRANSFER_COMPLETED;
+		return ERROR_FAIL;
+	}
+
+	/* Take transfer descriptor from the pool */
+	struct cmsis_dap_async_xfer *cmsis_xfer = cmsis_dap_alloc_xfer(dap);
+	if (!cmsis_xfer || !cmsis_xfer->xfer)
+		return ERROR_FAIL;
+
+	/* Allocate data buffer */
+	uint8_t *buffer = malloc(txlen);
+	if (!buffer) {
+		cmsis_dap_free_xfer(cmsis_xfer, false);
+		return ERROR_FAIL;
+	}
+
+	/* Populate data buffer and transfer descriptor */
+	memcpy(buffer, dap->packet_buffer, txlen);
+	libusb_fill_bulk_transfer(cmsis_xfer->xfer, dap->bdata->dev_handle, dap->bdata->ep_out,
+							  buffer, txlen, out_xfer_cb, cmsis_xfer, timeout_ms);
+
+	/* Submit the transfer. This call returns immediately, all data is queued in the kernel */
+	int hr = libusb_submit_transfer(cmsis_xfer->xfer);
+	if (hr != LIBUSB_SUCCESS) {
+		cmsis_dap_free_xfer(cmsis_xfer, true);
+		return ERROR_FAIL;
+	}
+
+	stats.in_flight++;
+	return txlen;
+}
+
+/** ***********************************************************************************************
+ * @brief Completion callback for async IN transfers
+ * @param xfr pointer to completed async transfer
+ *************************************************************************************************/
+static void LIBUSB_CALL in_xfer_cb(struct libusb_transfer *xfr)
+{
+	struct cmsis_dap_async_xfer *cmsis_xfer = (struct cmsis_dap_async_xfer *)xfr->user_data;
+	assert(cmsis_xfer->xfer == xfr);
+
+	/* Mark transfer as completed, all IN transfers are synchronization points */
+	cmsis_xfer->completed = 1;
+
+	if (xfr->status == LIBUSB_TRANSFER_COMPLETED) {
+		if (stats.in_fifo)
+			stats.in_fifo--;
+	}
+}
+
+/** ***********************************************************************************************
+ * @brief Allocates, submits and waits for completion of async IN transfer
+ * @param dap pointer to cmsis_dap object
+ * @param timeout_ms transfer timeout
+ * @return ERROR_OK in case of success, ERROR_XXX code otherwise
+ *************************************************************************************************/
+static int cmsis_dap_usb_read_async(struct cmsis_dap *dap, int timeout_ms)
+{
+	struct cmsis_dap_async_xfer *cmsis_xfer = cmsis_dap_alloc_xfer(dap);
+	if (!cmsis_xfer || !cmsis_xfer->xfer)
+		return ERROR_FAIL;
+
+	/* Populate the transfer descriptor */
+	libusb_fill_bulk_transfer(cmsis_xfer->xfer, dap->bdata->dev_handle, dap->bdata->ep_in,
+							  dap->packet_buffer, dap->packet_size, in_xfer_cb, cmsis_xfer, timeout_ms);
+
+	/* Submit the transfer, this call returns immediately */
+	int hr = libusb_submit_transfer(cmsis_xfer->xfer);
+	if (hr != LIBUSB_SUCCESS) {
+		cmsis_dap_free_xfer(cmsis_xfer, false);
+		return ERROR_FAIL;
+	}
+
+	/* Wait for the transfer completion */
+	while(!cmsis_xfer->completed)
+		libusb_handle_events_completed(dap->bdata->usb_ctx, &cmsis_xfer->completed);
+
+	/* Retrieve the transfer status and return descriptor to the pool */
+	int transferred = cmsis_xfer->xfer->actual_length;
+	hr = cmsis_xfer->xfer->status;
+	cmsis_dap_free_xfer(cmsis_xfer, false);
+
+	/* Timeout is a spacial case which is handled in upper layers of CMSIS-DAP driver */
+	if (hr == LIBUSB_TRANSFER_TIMED_OUT) {
+		/* This is for debug only, to be removed in the future */
+		if (stats.in_fifo != 0) {
+			LOG_ERROR("In Flight: %zu, In FIFO: %zu", stats.in_flight, stats.in_fifo);
+			libusb_reset_device(dap->bdata->dev_handle);
+			assert(false);
+		}
+
+		return ERROR_TIMEOUT_REACHED;
+	}
+
+	if (hr != LIBUSB_TRANSFER_COMPLETED)
+		return ERROR_FAIL;
+
+	/* Cleanup the buffer's tail */
+	memset(&dap->packet_buffer[transferred], 0, dap->packet_buffer_size - transferred);
+	return transferred;
+}
+
 COMMAND_HANDLER(cmsis_dap_handle_usb_interface_command)
 {
 	if (CMD_ARGC == 1)
@@ -488,5 +713,14 @@ const struct cmsis_dap_backend cmsis_dap_usb_backend = {
 	.close = cmsis_dap_usb_close,
 	.read = cmsis_dap_usb_read,
 	.write = cmsis_dap_usb_write,
+	.packet_buffer_alloc = cmsis_dap_usb_alloc,
+};
+
+const struct cmsis_dap_backend cmsis_dap_usb_backend_async = {
+	.name = "usb_bulk_async",
+	.open = cmsis_dap_usb_open,
+	.close = cmsis_dap_usb_close,
+	.read = cmsis_dap_usb_read_async,
+	.write = cmsis_dap_usb_write_async,
 	.packet_buffer_alloc = cmsis_dap_usb_alloc,
 };

@@ -101,15 +101,6 @@ static const struct stack_register_offset rtos_standard_cortex_r4_stack_offsets[
 	{ 14, -2,   32 },		/* sp   */
 	{ 15, 0x3c, 32 },		/* lr   */
 	{ 16, 0x40, 32 },		/* pc   */
-	{ 17, -1,   96 },		/* FPA1 */
-	{ 18, -1,   96 },		/* FPA2 */
-	{ 19, -1,   96 },		/* FPA3 */
-	{ 20, -1,   96 },		/* FPA4 */
-	{ 21, -1,   96 },		/* FPA5 */
-	{ 22, -1,   96 },		/* FPA6 */
-	{ 23, -1,   96 },		/* FPA7 */
-	{ 24, -1,   96 },		/* FPA8 */
-	{ 25, -1,   32 },		/* FPS  */
 	{ 26, 0x04, 32 },		/* CSPR */
 };
 
@@ -275,7 +266,7 @@ const struct rtos_register_stacking rtos_standard_cortex_m4f_fpu_stacking = {
 const struct rtos_register_stacking rtos_standard_cortex_r4_stacking = {
 	0x48,				/* stack_registers_size */
 	-1,					/* stack_growth_direction */
-	26,					/* num_output_registers */
+	17,					/* num_output_registers */
 	rtos_generic_stack_align8,	/* stack_alignment */
 	rtos_standard_cortex_r4_stack_offsets	/* register_offsets */
 };

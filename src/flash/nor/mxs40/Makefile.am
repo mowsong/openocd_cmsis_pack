@@ -9,7 +9,8 @@ NOR_DRIVERS_MXS40 = \
 	%D%/efuse.c \
 	%D%/mxs40.c \
 	%D%/psoc6.c \
-	%D%/traveo2.c
+	%D%/traveo2.c \
+	%D%/traveo2_wflash.c
 
 NOR_HEADERS_MXS40 = \
 	%D%/mxs40.h

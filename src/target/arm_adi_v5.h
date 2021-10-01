@@ -173,7 +173,6 @@ enum swd_special_seq {
 	SWD_TO_JTAG,
 	SWD_TO_DORMANT,
 	DORMANT_TO_SWD,
-	JTAG_TO_DORMANT,
 	DORMANT_TO_JTAG,
 };
 

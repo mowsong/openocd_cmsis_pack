@@ -12,10 +12,11 @@
  *   vanekt@fbl.cz                                                         *
  *                                                                         *
  *   Copyright (C) 2020 by Bohdan Tymkiv, Andrii Lishchynskyi              *
- *   bohdan.tymkiv@cypress.com                                             *
- *   andrii.lishchynskyi@cypress.com                                       *
+ *   bohdan.tymkiv@infineon.com                                            *
+ *   andrii.lishchynskyi@infineon.com                                      *
  *                                                                         *
- *   Copyright (C) <2019-2020> < Cypress Semiconductor Corporation >       *
+ *   Copyright (C) <2019-2021>                                             *
+ *     <Cypress Semiconductor Corporation (an Infineon company)>           *
  *                                                                         *
  *   This program is free software; you can redistribute it and/or modify  *
  *   it under the terms of the GNU General Public License as published by  *
@@ -253,6 +254,7 @@ const struct psoc4_chip_family psoc4_families[] = {
 	{ 0xA1, {0, 0},           "PSoC 4100M/4200M",                     .flags = PSOC4_FLAG_IMO_NOT_REQUIRED, .spcif_ver = spcif_v2 },
 	{ 0xA3, {0, 0},           "PSoC 4xx8 BLE",                        .flags = PSOC4_FLAG_IMO_NOT_REQUIRED, .spcif_ver = spcif_v2 },
 	{ 0xA7, {0, 0},           "PSoC 4000DS/4200DS",                   .flags = 0, .spcif_ver = spcif_v2 },
+	{ 0xA8, {0, 0},           "CCG4",                                 .flags = 0, .spcif_ver = spcif_v2 },
 	{ 0xA9, {0, 0},           "PSoC 4000S/4700S",                     .flags = 0, .spcif_ver = spcif_v3 },
 	{ 0xAA, {0, 0},           "PSoC 4xx8 BLE",                        .flags = PSOC4_FLAG_IMO_NOT_REQUIRED, .spcif_ver = spcif_v2 },
 	{ 0xAB, {0, 0},           "PSoC 4100S",                           .flags = 0, .spcif_ver = spcif_v3 },
@@ -260,6 +262,7 @@ const struct psoc4_chip_family psoc4_families[] = {
 	{ 0xAD, {0x1D20, 0x1DFF}, "PMG1-S2",                              .flags = 0, .spcif_ver = spcif_v3 },
 	{ 0xAD, {0x1D00, 0x1D1F}, "CCG3",                                 .flags = 0, .spcif_ver = spcif_v3 },
 	{ 0xAE, {0, 0},           "PSoC 4xx8 BLE",                        .flags = PSOC4_FLAG_IMO_NOT_REQUIRED, .spcif_ver = spcif_v2 },
+	{ 0xAF, {0, 0},           "CCG4",                                 .flags = 0, .spcif_ver = spcif_v2 },
 	{ 0xB0, {0x2020, 0x204F}, "PMG1-S0",                              .flags = 0, .spcif_ver = spcif_v3 },
 	{ 0xB0, {0x2000, 0x20FF}, "CCG3PA",                               .flags = 0, .spcif_ver = spcif_v3 },
 	{ 0xB5, {0, 0},           "PSoC 4100S Plus",                      .flags = 0, .spcif_ver = spcif_v3 },
@@ -269,9 +272,11 @@ const struct psoc4_chip_family psoc4_families[] = {
 	{ 0xBA, {0x2A00, 0x2A1F}, "CCG6",                                 .flags = 0, .spcif_ver = spcif_v3 },
 	{ 0xBE, {0, 0},           "PSoC 4100S Max",                       .flags = 0, .spcif_ver = spcif_v3 },
 	{ 0xC0, {0, 0},           "CCG6DF",                               .flags = 0, .spcif_ver = spcif_v3 },
+	{ 0xC1, {0, 0},           "CCG7D",                                .flags = 0, .spcif_ver = spcif_v3 },
 	{ 0xC2, {0, 0},           "PSoC4 HV PA",                          .flags = 0, .spcif_ver = spcif_v3 },
 	{ 0xC3, {0, 0},           "CCG6SF",                               .flags = 0, .spcif_ver = spcif_v3 },
 	{ 0xC5, {0, 0},           "PMG1-S3",                              .flags = 0, .spcif_ver = spcif_v3 },
+	{ 0xCA, {0, 0},           "CCG7S",                                .flags = 0, .spcif_ver = spcif_v3 },
 	{ 0,    {0, 0},           "Unknown",                              .flags = 0, .spcif_ver = spcif_unknown }
 };
 
@@ -654,7 +659,7 @@ static int psoc4_sysreq(struct flash_bank *bank, uint8_t cmd,
 		sysreq_wait_algorithm->address + sysreq_wait_algorithm->size);
 
 	struct armv7m_common *armv7m = target_to_armv7m(target);
-	if (!armv7m) {
+	if (armv7m == NULL) {
 		/* something is very wrong if armv7m is NULL */
 		LOG_ERROR("unable to get armv7m target");
 		retval = ERROR_FAIL;
@@ -756,7 +761,11 @@ static int psoc4_get_silicon_id(struct flash_bank *bank, bool no_algo, uint32_t 
 	if (protection)
 		*protection = psoc4_info->chip_protection;
 
-	return ERROR_OK;
+	/* Disable 0x0000:0000 - 0x0000:0007 remap to ROM */
+	retval = target_write_u32(bank->target, psoc4_info->cpuss_sysreq_addr,
+			PSOC4_SROM_HMASTER_BIT | PSOC4_DIS_RESET_VECT_REL_BIT);
+
+	return retval;
 }
 
 
@@ -1359,6 +1368,7 @@ static int psoc4_write_inner(struct flash_bank *bank, const uint8_t *buffer,
 		count -= bytes_thisrun;
 		buffer += bytes_thisrun;
 		progress_left(count);
+		keep_alive();
 	}
 
 err_stop_algorithm:
@@ -1455,33 +1465,44 @@ static int psoc4_chip_protect(struct target *target)
 
 static int psoc4_flash_prot_write(struct flash_bank *bank, const uint8_t *buffer, uint32_t offset, uint32_t count)
 {
+	struct psoc4_flash_bank *psoc4_info = bank->driver_priv;
+	int retval;
+
 	if(is_chip_prot_bank(bank)) {
 		assert(offset == 0);
 		assert(count == 1);
 		uint8_t current_prot = 0;
-		int retval = psoc4_get_silicon_id(bank, false, NULL, NULL, &current_prot);
+		retval = psoc4_get_silicon_id(bank, false, NULL, NULL, &current_prot);
 		if(retval != ERROR_OK)
-			return retval;
+			goto cleanup;
 
-		if(current_prot == *buffer)
-			return ERROR_OK;
+		if(current_prot == *buffer) {
+			retval = ERROR_OK;
+			goto cleanup;
+		}
 
-		if(current_prot == PSOC4_CHIP_PROT_OPEN && *buffer == PSOC4_CHIP_PROT_PROTECTED)
-			return psoc4_chip_protect(bank->target);
-
+		retval = ERROR_FAIL;
 		if(current_prot == PSOC4_CHIP_PROT_PROTECTED && *buffer == PSOC4_CHIP_PROT_OPEN) {
 			LOG_ERROR("Protection 'OPEN' can not be applied while chip is in 'PROTECTED' state, "
 						"use 'psoc4 mass_erase 0' to unlock the chip");
+		} else if(current_prot == PSOC4_CHIP_PROT_OPEN && *buffer == PSOC4_CHIP_PROT_PROTECTED) {
+			retval = psoc4_chip_protect(bank->target);
 		} else {
 			LOG_ERROR("Transition '%s' -> '%s' is not supported",
 					  psoc4_decode_chip_protection(current_prot),
 					  psoc4_decode_chip_protection(*buffer));
 		}
-
-		return ERROR_FAIL;
 	} else {
-		return psoc4_flash_prot_write_inner(bank, PSOC4_CHIP_PROT_OPEN, buffer, offset, count);
+		retval = psoc4_flash_prot_write_inner(bank, PSOC4_CHIP_PROT_OPEN, buffer, offset, count);
 	}
+
+cleanup:
+	/* Disable 0x0000:0000 - 0x0000:0007 remap to ROM */
+	if (retval == ERROR_OK)
+		retval = target_write_u32(bank->target, psoc4_info->cpuss_sysreq_addr,
+				PSOC4_SROM_HMASTER_BIT | PSOC4_DIS_RESET_VECT_REL_BIT);
+
+	return retval;
 }
 
 /*************************************************************************************************
@@ -2005,7 +2026,7 @@ static int psoc4_flash_prot_blank_check(struct flash_bank *bank) {
  * @param buf_size - the size of the human buffer.
  * @return ERROR_OK in case of success, ERROR_XXX code otherwise
  *************************************************************************************************/
-static int get_psoc4_info(struct flash_bank *bank, char *buf, int buf_size)
+static int get_psoc4_info(struct flash_bank *bank, struct command_invocation *cmd)
 {
 	struct target *target = bank->target;
 	struct psoc4_flash_bank *psoc4_info = bank->driver_priv;
@@ -2022,6 +2043,7 @@ static int get_psoc4_info(struct flash_bank *bank, char *buf, int buf_size)
 		return ERROR_OK;
 	}
 
+	int retval;
 	uint32_t silicon_id;
 	uint16_t family_id;
 	uint8_t protection;
@@ -2031,11 +2053,11 @@ static int get_psoc4_info(struct flash_bank *bank, char *buf, int buf_size)
 		return retval;
 
 	if (family_id != psoc4_info->family_id)
-		printed = snprintf(buf, buf_size, "Family id mismatch 0x%02" PRIx16
+		command_print_sameline(cmd, "Family id mismatch 0x%02" PRIx16
 				"/0x%02" PRIx16 ", silicon id 0x%08" PRIx32,
 				psoc4_info->family_id, family_id, silicon_id);
 	else {
-		printed = snprintf(buf, buf_size, "%s silicon id 0x%08" PRIx32 "",
+		command_print_sameline(cmd, "%s silicon id 0x%08" PRIx32 "",
 				family->name, silicon_id);
 	}
 
@@ -2074,7 +2096,7 @@ static bool g_ecc_enabled;
 	FAULT_MASK0_FLASH1_C_ECC | FAULT_MASK0_FLASH1_NC_ECC)
 
 /** ***********************************************************************************************
- * @brief Configures ECC error reporting on Traveo-II devices
+ * @brief Configures ECC error reporting on TRAVEO™II devices
  * @param target current target
  * @param enabled true if ECC error reporting should be enabled
  * @return ERROR_OK in case of success, ERROR_XXX code otherwise
@@ -2140,7 +2162,7 @@ static int psoc4_configure_ecc(struct target *target, bool enabled)
 }
 
 /** ***********************************************************************************************
- * @brief Performs Flash Read operation with ECC error reporting. This function is used in Traveo-II
+ * @brief Performs Flash Read operation with ECC error reporting. This function is used in TRAVEO™II
  * devices only since PSoC6 does not support ECC.
  * @param bank The bank to read
  * @param buffer The data bytes read
@@ -2226,7 +2248,7 @@ COMMAND_HANDLER(psoc4_handle_mass_erase_command)
 
 	struct flash_bank *bank;
 	int retval = CALL_COMMAND_HANDLER(flash_command_get_bank, 0, &bank);
-	if (retval != ERROR_OK)
+	if (ERROR_OK != retval)
 		return retval;
 
 	if (is_flash_prot_bank(bank))
@@ -2267,6 +2289,22 @@ COMMAND_HANDLER(psoc4_handle_chip_protect)
 	return psoc4_chip_protect(get_current_target(CMD_CTX));
 }
 
+COMMAND_HANDLER(psoc4_handle_disable_cpu_read_relocations_command)
+{
+	struct flash_bank *bank;
+
+	if (CMD_ARGC != 0)
+		return ERROR_COMMAND_SYNTAX_ERROR;
+
+	int err = get_flash_bank_by_num(0, &bank);
+	if (!bank || err != ERROR_OK)
+		return ERROR_FAIL;
+
+	/* Disable 0x0000:0000 - 0x0000:0007 remap to ROM */
+	struct psoc4_flash_bank *psoc4_info = bank->driver_priv;
+	return target_write_u32(bank->target, psoc4_info->cpuss_sysreq_addr, PSOC4_DIS_RESET_VECT_REL_BIT);
+}
+
 static const struct command_registration psoc4_exec_command_handlers[] = {
 	{
 		.name = "mass_erase",
@@ -2302,6 +2340,13 @@ static const struct command_registration psoc4_exec_command_handlers[] = {
 		.mode = COMMAND_EXEC,
 		.usage = "on|off",
 		.help = "Controls ECC error reporting",
+	},
+	{
+		.name = "disable_cpu_read_relocations",
+		.handler = psoc4_handle_disable_cpu_read_relocations_command,
+		.mode = COMMAND_EXEC,
+		.usage = "",
+		.help = "Disables Reset Vector fetch relocation",
 	},
 	COMMAND_REGISTRATION_DONE
 };

@@ -1,3 +1,5 @@
+#include <string.h>
+
 #include "progress.h"
 #include "log.h"
 

@@ -243,10 +243,10 @@ struct adapter_driver *adapter_drivers[] = {
 #endif
 #if BUILD_CMSIS_DAP_USB == 1 || BUILD_CMSIS_DAP_HID == 1
 		&cmsis_dap_adapter_driver,
+		&kitprog3_adapter_driver,
 #endif
 #if BUILD_KITPROG == 1
 		&kitprog_adapter_driver,
-		&kitprog3_adapter_driver,
 #endif
 #if BUILD_IMX_GPIO == 1
 		&imx_gpio_adapter_driver,

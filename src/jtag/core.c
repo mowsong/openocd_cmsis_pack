@@ -1565,6 +1565,9 @@ int adapter_init(struct command_context *cmd_ctx)
 	return ERROR_OK;
 }
 
+bool do_scan_chain_test;
+#include "helper/time_support.h"
+
 int jtag_init_inner(struct command_context *cmd_ctx)
 {
 	struct jtag_tap *tap;
@@ -1590,6 +1593,35 @@ int jtag_init_inner(struct command_context *cmd_ctx)
 			"AUTO PROBING MIGHT NOT WORK!!");
 
 		/* REVISIT default clock will often be too fast ... */
+	}
+
+	if (do_scan_chain_test) {
+		LOG_INFO("Running JTAG Scan test, press Ctrl+C to exit...");
+		jtag_reset_config |= RESET_HAS_SRST;
+		adapter_assert_reset();
+		adapter_deassert_reset();
+		uint32_t iter = 0;
+		uint32_t iter_from_start = 0;
+		int64_t start_time = timeval_ms();
+		while (true) {
+			enum log_levels lvl = change_debug_level(LOG_LVL_USER);
+			jtag_add_tlr();
+			jtag_execute_queue();
+			retval = jtag_examine_chain();
+			change_debug_level(lvl);
+			iter++;
+			iter_from_start++;
+			if (retval != ERROR_OK) {
+				LOG_ERROR("Scan failed after %" PRId32 " iterations (%" PRIi64 " ms)!",
+						  iter, timeval_ms() - start_time);
+				adapter_assert_reset();
+				adapter_deassert_reset();
+				iter = 0;
+				start_time = timeval_ms();
+			}
+			if (iter_from_start && iter_from_start % 1000 == 0)
+				LOG_INFO("%" PRId32 " iterations completed...", iter_from_start);
+		}
 	}
 
 	jtag_add_tlr();

@@ -670,6 +670,11 @@ int dap_dp_init(struct adiv5_dap *dap)
 	dap->do_reconnect = false;
 	dap_invalidate_cache(dap);
 
+	/* JTAG State Machine may be in unpredictable state e.g. after Reset
+	 * Move to TLR unconditionally here */
+	if(transport_is_jtag())
+		jtag_add_tlr();
+
 	/*
 	 * Early initialize dap->dp_ctrl_stat.
 	 * In jtag mode only, if the following queue run (in dap_dp_poll_register)
@@ -684,33 +689,48 @@ int dap_dp_init(struct adiv5_dap *dap)
 	 * is ignored in swd mode. It also powers-up system and debug domains in
 	 * both jtag and swd modes, if not done before.
 	 */
-	retval = dap_queue_dp_write(dap, DP_CTRL_STAT, dap->dp_ctrl_stat | SSTICKYERR);
-	if (retval != ERROR_OK)
-		return retval;
-
-	retval = dap_queue_dp_read(dap, DP_CTRL_STAT, NULL);
-	if (retval != ERROR_OK)
-		return retval;
-
-	retval = dap_queue_dp_write(dap, DP_CTRL_STAT, dap->dp_ctrl_stat);
-	if (retval != ERROR_OK)
-		return retval;
 
 	/* Check that we have debug power domains activated */
-	LOG_DEBUG("DAP: wait CDBGPWRUPACK");
-	retval = dap_dp_poll_register(dap, DP_CTRL_STAT,
-				      CDBGPWRUPACK, CDBGPWRUPACK,
-				      DAP_POWER_DOMAIN_TIMEOUT);
-	if (retval != ERROR_OK)
-		return retval;
+	bool succedded = false;
+	for(int attempts = 0; attempts < 10; attempts++) {
 
-	if (!dap->ignore_syspwrupack) {
-		LOG_DEBUG("DAP: wait CSYSPWRUPACK");
-		retval = dap_dp_poll_register(dap, DP_CTRL_STAT,
-					      CSYSPWRUPACK, CSYSPWRUPACK,
-					      DAP_POWER_DOMAIN_TIMEOUT);
+		retval = dap_queue_dp_write(dap, DP_CTRL_STAT, dap->dp_ctrl_stat | SSTICKYERR);
 		if (retval != ERROR_OK)
-			return retval;
+			continue;
+
+		retval = dap_queue_dp_read(dap, DP_CTRL_STAT, NULL);
+		if (retval != ERROR_OK)
+			continue;
+
+		retval = dap_queue_dp_write(dap, DP_CTRL_STAT, dap->dp_ctrl_stat);
+		if (retval != ERROR_OK)
+			continue;
+
+		retval = dap_run(dap);
+		if (retval != ERROR_OK)
+			continue;
+
+		LOG_DEBUG("DAP: wait CDBGPWRUPACK");
+		retval = dap_dp_poll_register(dap, DP_CTRL_STAT,
+					CDBGPWRUPACK, CDBGPWRUPACK, DAP_POWER_DOMAIN_TIMEOUT);
+		if (retval != ERROR_OK)
+			continue;
+
+		if (!dap->ignore_syspwrupack) {
+			LOG_DEBUG("DAP: wait CSYSPWRUPACK");
+			retval = dap_dp_poll_register(dap, DP_CTRL_STAT,
+					CSYSPWRUPACK, CSYSPWRUPACK, DAP_POWER_DOMAIN_TIMEOUT);
+			if (retval != ERROR_OK)
+				continue;
+		}
+
+		succedded = true;
+		break;
+	}
+
+	if(!succedded) {
+		LOG_DEBUG("DAP '%s' failed to power-up debug power domain", dap->tap->dotted_name);
+		return ERROR_FAIL;
 	}
 
 	retval = dap_queue_dp_read(dap, DP_CTRL_STAT, NULL);
@@ -1201,6 +1221,7 @@ static const struct {
 	{ ARM_ID, 0xd07, "Cortex-A57 Debug",           "(Debug Unit)", },
 	{ ARM_ID, 0xd08, "Cortex-A72 Debug",           "(Debug Unit)", },
 	{ ARM_ID, 0xd0b, "Cortex-A76 Debug",           "(Debug Unit)", },
+	{ ARM_ID, 0xd21, "Cortex-M33 Debug",           "(Debug Unit)", },
 	{ 0x097,  0x9af, "MSP432 ROM",                 "(ROM Table)" },
 	{ 0x09f,  0xcd0, "Atmel CPU with DSU",         "(CPU)" },
 	{ 0x0c1,  0x1db, "XMC4500 ROM",                "(ROM Table)" },

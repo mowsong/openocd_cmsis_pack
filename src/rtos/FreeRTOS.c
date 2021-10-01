@@ -51,6 +51,43 @@ struct freertos_params {
 	const struct rtos_register_stacking *stacking_info_cm3;
 	const struct rtos_register_stacking *stacking_info_cm4f;
 	const struct rtos_register_stacking *stacking_info_cm4f_fpu;
+	const struct rtos_register_stacking *stacking_info_cm33_nofp_notz;
+};
+
+static int64_t freertos_cm33_nofp_notz_stack_align(struct target *target, const uint8_t *stack_data,
+        const struct rtos_register_stacking *stacking, int64_t stack_ptr)
+{
+    const int XPSR_OFFSET = 0x44;
+	return rtos_cortex_m_stack_align(target, stack_data, stacking,
+                                     stack_ptr, XPSR_OFFSET);
+}
+
+static const struct stack_register_offset freertos_cm33_nofp_notz_stack_offsets[] = {
+    { ARMV7M_R0,   0x28, 32 },		/* r0   */
+    { ARMV7M_R1,   0x2c, 32 },		/* r1   */
+    { ARMV7M_R2,   0x30, 32 },		/* r2   */
+    { ARMV7M_R3,   0x34, 32 },		/* r3   */
+    { ARMV7M_R4,   0x08, 32 },		/* r4   */
+    { ARMV7M_R5,   0x0C, 32 },		/* r5   */
+    { ARMV7M_R6,   0x10, 32 },		/* r6   */
+    { ARMV7M_R7,   0x14, 32 },		/* r7   */
+    { ARMV7M_R8,   0x18, 32 },		/* r8   */
+    { ARMV7M_R9,   0x1C, 32 },		/* r9   */
+    { ARMV7M_R10,  0x20, 32 },		/* r10  */
+    { ARMV7M_R11,  0x24, 32 },		/* r11  */
+    { ARMV7M_R12,  0x38, 32 },		/* r12  */
+    { ARMV7M_R13,  -2,   32 },		/* sp   */
+    { ARMV7M_R14,  0x3C, 32 },		/* lr   */
+    { ARMV7M_PC,   0x40, 32 },		/* pc   */
+    { ARMV7M_xPSR, 0x44, 32 },		/* xPSR */
+};
+
+static const struct rtos_register_stacking freertos_cm33_nofp_notz_stacking = {
+    0x48,					/* stack_registers_size 4 more for LR*/
+    -1,						/* stack_growth_direction */
+    ARMV7M_NUM_CORE_REGS,	/* num_output_registers */
+    freertos_cm33_nofp_notz_stack_align,	/* stack_alignment */
+    freertos_cm33_nofp_notz_stack_offsets	/* register_offsets */
 };
 
 static const struct freertos_params freertos_params_list[] = {
@@ -67,6 +104,22 @@ static const struct freertos_params freertos_params_list[] = {
 	&rtos_standard_cortex_m3_stacking,	/* stacking_info */
 	&rtos_standard_cortex_m4f_stacking,
 	&rtos_standard_cortex_m4f_fpu_stacking,
+	&freertos_cm33_nofp_notz_stacking,
+	},
+	{
+	"cortex_r4",			/* target_name */
+	4,						/* thread_count_width; */
+	4,						/* pointer_width; */
+	16,						/* list_next_offset; */
+	20,						/* list_width; */
+	8,						/* list_elem_next_offset; */
+	12,						/* list_elem_content_offset */
+	0,						/* thread_stack_offset; */
+	52,						/* thread_name_offset; */
+	&rtos_standard_cortex_r4_stacking,	/* stacking_info */
+	NULL,
+	NULL,
+	NULL,
 	},
 	{
 	"hla_target",			/* target_name */
@@ -81,6 +134,7 @@ static const struct freertos_params freertos_params_list[] = {
 	&rtos_standard_cortex_m3_stacking,	/* stacking_info */
 	&rtos_standard_cortex_m4f_stacking,
 	&rtos_standard_cortex_m4f_fpu_stacking,
+	&freertos_cm33_nofp_notz_stacking,
 	},
 	{
 	"nds32_v3",			/* target_name */
@@ -95,6 +149,7 @@ static const struct freertos_params freertos_params_list[] = {
 	&rtos_standard_nds32_n1068_stacking,	/* stacking_info */
 	&rtos_standard_cortex_m4f_stacking,
 	&rtos_standard_cortex_m4f_fpu_stacking,
+	&freertos_cm33_nofp_notz_stacking,
 	},
 };
 
@@ -175,6 +230,11 @@ static int freertos_update_threads(struct rtos *rtos)
 		return -2;
 	}
 
+	if (rtos->symbols[FREERTOS_VAL_UX_TOP_USED_PRIORITY].address == 0) {
+		LOG_ERROR("FreeRTOS: uxTopUsedPriority is not defined, consult the OpenOCD manual for a work-around");
+		return ERROR_FAIL;
+	}
+
 	uint32_t thread_list_size = 0;
 	retval = target_read_u32(rtos->target,
 			rtos->symbols[FREERTOS_VAL_UX_CURRENT_NUMBER_OF_TASKS].address,
@@ -239,10 +299,6 @@ static int freertos_update_threads(struct rtos *rtos)
 	}
 
 	/* Find out how many lists are needed to be read from pxReadyTasksLists, */
-	if (rtos->symbols[FREERTOS_VAL_UX_TOP_USED_PRIORITY].address == 0) {
-		LOG_ERROR("FreeRTOS: uxTopUsedPriority is not defined, consult the OpenOCD manual for a work-around");
-		return ERROR_FAIL;
-	}
 	uint32_t top_used_priority = 0;
 	retval = target_read_u32(rtos->target,
 			rtos->symbols[FREERTOS_VAL_UX_TOP_USED_PRIORITY].address,
@@ -396,6 +452,23 @@ static int freertos_update_threads(struct rtos *rtos)
 	return 0;
 }
 
+static int freertos_read_stack_regs_armv8m(struct rtos *rtos, int64_t stack_ptr,
+										   struct rtos_reg **reg_list, int *num_regs) {
+	const struct freertos_params *param = rtos->rtos_specific_params;
+	const struct rtos_register_stacking *stacking = param->stacking_info_cm33_nofp_notz;
+	struct target *target = rtos->target;
+
+	struct armv7m_common *armv7m_target = target_to_armv7m(target);
+	struct cortex_m_common *cortex_m = target_to_cm(target);
+
+	if (cortex_m->core_info->partno != CORTEX_M33_PARTNO || armv7m_target->fp_feature != FP_NONE) {
+		LOG_ERROR("FreeRTOS: Only Cortex-M33 with no FPU is currently supported");
+		return ERROR_FAIL;
+	}
+
+	return rtos_generic_stack_read(target, stacking, stack_ptr, reg_list, num_regs);
+}
+
 static int freertos_get_thread_reg_list(struct rtos *rtos, int64_t thread_id,
 		struct rtos_reg **reg_list, int *num_regs)
 {
@@ -432,6 +505,10 @@ static int freertos_get_thread_reg_list(struct rtos *rtos, int64_t thread_id,
 	int cm4_fpu_enabled = 0;
 	struct armv7m_common *armv7m_target = target_to_armv7m(rtos->target);
 	if (is_armv7m(armv7m_target)) {
+
+		if (armv7m_target->arm.arch == ARM_ARCH_V8M)
+			return freertos_read_stack_regs_armv8m(rtos, stack_ptr, reg_list, num_regs);
+
 		if (armv7m_target->fp_feature == FPV4_SP) {
 			/* Found ARM v7m target which includes a FPU */
 			uint32_t cpacr;

@@ -38,6 +38,7 @@
 #include <target/arm_cti.h>
 #include <target/arm_adi_v5.h>
 #include <target/arm_tpiu_swo.h>
+#include <rtos/rtos.h>
 #include <rtt/rtt.h>
 
 #include <server/server.h>
@@ -259,6 +260,7 @@ static struct command_context *setup_command_handler(Jim_Interp *interp)
 		&pld_register_commands,
 		&cti_register_commands,
 		&dap_register_commands,
+		&rtos_register_commands,
 		&arm_tpiu_swo_register_commands,
 		NULL
 	};
@@ -325,6 +327,32 @@ static int openocd_thread(int argc, char *argv[], struct command_context *cmd_ct
 	return ERROR_OK;
 }
 
+void openocd_cleanup(struct command_context *cmd_ctx)
+{
+	flash_free_all_banks();
+	gdb_service_free();
+	arm_tpiu_swo_cleanup_all();
+	server_free();
+
+
+	/* free all DAP and CTI objects */
+	arm_cti_cleanup_all();
+	dap_cleanup_all();
+
+	unregister_all_commands(cmd_ctx, NULL);
+	help_del_all_commands(cmd_ctx);
+
+	adapter_quit();
+
+	server_host_os_close();
+
+	/* Shutdown commandline interface */
+	command_exit(cmd_ctx);
+	rtt_exit();
+
+	free_config();
+}
+
 /* normally this is the main() function entry, but if OpenOCD is linked
  * into application, then this fn will not be invoked, but rather that
  * application will have it's own implementation of main(). */
@@ -355,27 +383,7 @@ int openocd_main(int argc, char *argv[])
 	/* Start the executable meat that can evolve into thread in future. */
 	ret = openocd_thread(argc, argv, cmd_ctx);
 
-	flash_free_all_banks();
-	gdb_service_free();
-	arm_tpiu_swo_cleanup_all();
-	server_free();
-
-	unregister_all_commands(cmd_ctx, NULL);
-	help_del_all_commands(cmd_ctx);
-
-	/* free all DAP and CTI objects */
-	arm_cti_cleanup_all();
-	dap_cleanup_all();
-
-	adapter_quit();
-
-	server_host_os_close();
-
-	/* Shutdown commandline interface */
-	command_exit(cmd_ctx);
-
-	rtt_exit();
-	free_config();
+	openocd_cleanup(cmd_ctx);
 
 	if (ret == ERROR_FAIL)
 		return EXIT_FAILURE;

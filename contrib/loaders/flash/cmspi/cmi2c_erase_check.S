@@ -77,7 +77,7 @@ read_ack_end:
 	orrs	r4, r4, r7					/* copy ones to left of read byte */
 	mov		r7, r9						/* pointer to result */
 	ldr		r6, [r7, #8]				/* get previous result */
-	ands	r6, r4						/* and read byte to result */
+	ands	r6, r6, r4					/* and read byte to result */
 	lsls	r4, r4, #8					/* shift result into higher byte */
 	orrs	r6, r6, r4					/* or read byte to result */
 	str		r6, [r7, #8]				/* save updated result */

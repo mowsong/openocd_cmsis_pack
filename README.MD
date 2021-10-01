@@ -5,7 +5,7 @@ Cypress Customized OpenOCD
 
 The Open On-Chip Debugger (OpenOCD) is free software that provides debugging, in-system programming, and boundary-scan testing.
 
-To work with ModusToolbox and Cypress devices and probes, Cypress has modified OpenOCD to support:
+To work with ModusToolbox™ and Cypress devices and probes, Cypress has modified OpenOCD to support:
 - Devices from PSoC 61/62/63/64 product lines and the corresponding kits
 - Devices from PSoC 4000S, PSoC4100S, PSoC 4100S Plus and PSoC 4500 product lines  and the corresponding kits
 - KitProg3 onboard programmer
@@ -31,4 +31,4 @@ Cypress maintains a collection of [Free and Open Source Software]( https://www.c
 
 OpenOCD documentation in [HTML](http://openocd.org/doc/html/index.html) or [PDF](http://openocd.org/doc/pdf/openocd.pdf).
 
-© Cypress Semiconductor Corporation, 2020.
+© Cypress Semiconductor Corporation, 2020-2021. This document is the property of Cypress Semiconductor Corporation, an Infineon Technologies company, and its affiliates ("Cypress"). 

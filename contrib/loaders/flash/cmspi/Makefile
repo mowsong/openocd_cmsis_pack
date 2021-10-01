@@ -1,9 +1,9 @@
 BIN2C = ../../../../src/helper/bin2char.sh
 
-SRCS=cmspi_read.S cmspi_write.S cmspi_erase_check.S \
-	cmdpi_read.S cmdpi_write.S cmdpi_erase_check.S \
-	cmqpi_read.S cmqpi_write.S cmqpi_erase_check.S \
-	cmi2c_read.S cmi2c_write.S cmi2c_erase_check.S \
+SRCS=cmspi_read.S cmspi_write.S cmspi_erase_check.S cmspi_verify.S \
+	cmdpi_read.S cmdpi_write.S cmdpi_erase_check.S cmdpi_verify.S \
+	cmqpi_read.S cmqpi_write.S cmqpi_erase_check.S cmqpi_verify.S \
+	cmi2c_read.S cmi2c_write.S cmi2c_erase_check.S cmi2c_verify.S \
 	cmi2c_calib.S cmi2c_scan.S
 
 OBJS=$(patsubst %.S,%.inc,$(SRCS))

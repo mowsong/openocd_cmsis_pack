@@ -1,10 +1,11 @@
 /***************************************************************************
  *                                                                         *
  *   Copyright (C) 2019 by Bohdan Tymkiv, Mykola Tuzyak                    *
- *   bohdan.tymkiv@cypress.com bohdan200@gmail.com                         *
- *   mykola.tyzyak@cypress.com                                             *
+ *   bohdan.tymkiv@infineon.com bohdan200@gmail.com                        *
+ *   mykola.tyzyak@infineon.com                                            *
  *                                                                         *
- *   Copyright (C) <2019-2020> < Cypress Semiconductor Corporation >       *
+ *   Copyright (C) <2019-2021>                                             *
+ *     <Cypress Semiconductor Corporation (an Infineon company)>           *
  *                                                                         *
  *   This program is free software; you can redistribute it and/or modify  *
  *   it under the terms of the GNU General Public License as published by  *
@@ -430,17 +431,16 @@ exit_free_wa:
  * @param bank current flash bank
  * @param req_and_params requect id of the function to invoke
  * @param working_area address of memory buffer in target's memory space for SROM API parameters
+ * @param check_errors true if error check and reporting should be performed
  * @param data_out pointer to variable which will be populated with execution status
  * @return ERROR_OK in case of success, ERROR_XXX code otherwise
  *************************************************************************************************/
-int mxs40_call_sromapi(struct flash_bank *bank,
-	uint32_t req_and_params,
-	uint32_t working_area,
-	uint32_t *data_out)
+int mxs40_call_sromapi_inner(struct flash_bank *bank, uint32_t req_and_params, uint32_t working_area,
+    bool check_errors, uint32_t *data_out)
 {
-	LOG_DEBUG("Executing SROM API #0x%08X", req_and_params);
+    LOG_DEBUG("Executing SROM API #0x%08X", req_and_params);
 
-	struct target *target = bank->target;
+    struct target *target = bank->target;
 
 	if(!g_stack_area && target->coreid != 0xFF) {
 		LOG_ERROR("SROM Call: target is not prepared for srom calls");
@@ -483,13 +483,28 @@ int mxs40_call_sromapi(struct flash_bank *bank,
 		return hr;
 	}
 
-	bool is_success = (*data_out & SROMAPI_STATUS_MSK) == SROMAPI_STAT_SUCCESS;
-	if (!is_success) {
+	bool is_error = (*data_out & SROMAPI_STATUS_MSK) != SROMAPI_STAT_SUCCESS;
+	if (check_errors && is_error) {
 		LOG_ERROR("SROM API execution failed. Status: 0x%08X", (uint32_t)*data_out);
 		return ERROR_TARGET_FAILURE;
 	}
 
 	return ERROR_OK;
+}
+
+/** ***********************************************************************************************
+ * @brief Invokes SROM API functions which are responsible for Flash operations
+ *
+ * @param bank current flash bank
+ * @param req_and_params requect id of the function to invoke
+ * @param working_area address of memory buffer in target's memory space for SROM API parameters
+ * @param data_out pointer to variable which will be populated with execution status
+ * @return ERROR_OK in case of success, ERROR_XXX code otherwise
+ *************************************************************************************************/
+int mxs40_call_sromapi(struct flash_bank *bank, uint32_t req_and_params,
+    uint32_t working_area, uint32_t *data_out)
+{
+    return mxs40_call_sromapi_inner(bank, req_and_params, working_area, true, data_out);
 }
 
 /** ***********************************************************************************************
@@ -688,7 +703,7 @@ int mxs40_protect(struct flash_bank *bank, int set, unsigned int first, unsigned
  * @param buf_size size of the buffer
  * @return ERROR_OK in case of success, ERROR_XXX code otherwise
  *************************************************************************************************/
-int mxs40_get_info(struct flash_bank *bank, char *buf, int buf_size)
+int mxs40_get_info(struct flash_bank *bank, struct command_invocation *cmd)
 {
 	struct mxs40_bank_info *info = bank->driver_priv;
 
@@ -703,7 +718,7 @@ int mxs40_get_info(struct flash_bank *bank, char *buf, int buf_size)
 	if (hr != ERROR_OK)
 		return hr;
 
-	snprintf(buf, buf_size, "Silicon ID: 0x%08X\nProtection: %s",
+	command_print_sameline(cmd, "Silicon ID: 0x%08X\nProtection: %s",
 		silicon_id, mxs40_protection_to_str(protection));
 
 	return ERROR_OK;
@@ -911,10 +926,13 @@ err_free_wa_algo:
  * @param addr address of the flash row
  * @param buffer pointer to the buffer with data
  * @param use_writerow true if current flash bank belongs to Supervisory Flash
+ * @param data_size - size of data to be programmed
+ *   0 – 1 byte     1 - 2 bytes    2 - 4 bytes     3 – 8 bytes     4 – 16 bytes
+ *   5 – 32 bytes   6 – 64 bytes   7 - 128 bytes   8 - 256 bytes   9 - 512 bytes
  * @return ERROR_OK in case of success, ERROR_XXX code otherwise
  *************************************************************************************************/
-int mxs40_program_row(struct flash_bank *bank, uint32_t addr, const uint8_t *buffer,
-	bool use_writerow)
+int mxs40_program_row_inner(struct flash_bank *bank, uint32_t addr, const uint8_t *buffer,
+    bool use_writerow, uint8_t data_size)
 {
 	struct target *target = bank->target;
 	struct mxs40_bank_info *info = bank->driver_priv;
@@ -931,7 +949,7 @@ int mxs40_program_row(struct flash_bank *bank, uint32_t addr, const uint8_t *buf
 		goto exit;
 
 	buf_set_u32(srom_params + 0x00, 0, 32, sromapi_req);
-	buf_set_u32(srom_params + 0x04, 0, 32, 0x109);
+	buf_set_u32(srom_params + 0x04, 0, 32, 0x100 | data_size);
 	buf_set_u32(srom_params + 0x08, 0, 32, addr);
 	buf_set_u32(srom_params + 0x0C, 0, 32, wa->address + 0x10);
 
@@ -950,6 +968,19 @@ exit_free_wa:
 
 exit:
 	return hr;
+}
+
+/** ***********************************************************************************************
+ * @brief Programs single Flash Row
+ * @param bank current flash bank
+ * @param addr address of the flash row
+ * @param buffer pointer to the buffer with data
+ * @param use_writerow true if current flash bank belongs to Supervisory Flash
+ * @return ERROR_OK in case of success, ERROR_XXX code otherwise
+ *************************************************************************************************/
+int mxs40_program_row(struct flash_bank *bank, uint32_t addr, const uint8_t *buffer, bool use_writerow)
+{
+    return mxs40_program_row_inner(bank, addr, buffer, use_writerow, 9);
 }
 
 /** ***********************************************************************************************

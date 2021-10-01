@@ -38,6 +38,8 @@
 #include "config.h"
 #endif
 
+#define GDB_LOG_PACKETS 0
+
 #include <target/breakpoints.h>
 #include <target/target_request.h>
 #include <target/register.h>
@@ -46,6 +48,7 @@
 #include <target/semihosting_common.h>
 #include "server.h"
 #include <flash/nor/core.h>
+#include <flash/nor/driver.h>
 #include "gdb_server.h"
 #include <target/image.h>
 #include <jtag/jtag.h>
@@ -112,7 +115,7 @@ static int gdb_error(struct connection *connection, int retval);
 static char *gdb_port;
 static char *gdb_port_next;
 
-static void gdb_log_callback(void *priv, const char *file, unsigned line,
+static void gdb_log_callback(void *priv, enum log_levels level, const char *file, unsigned line,
 		const char *function, const char *string);
 
 static void gdb_sig_halted(struct connection *connection);
@@ -132,7 +135,8 @@ static int gdb_flash_program = 1;
  * see the code in gdb_read_memory_packet() for further explanations.
  * Disabled by default.
  */
-static int gdb_report_data_abort;
+/* BHDT: Enabled due to PT-2099 */
+static int gdb_report_data_abort = 1;
 /* If set, errors when accessing registers are reported to gdb. Disabled by
  * default. */
 static int gdb_report_register_access_error;
@@ -359,8 +363,10 @@ static int gdb_write(struct connection *connection, void *data, int len)
 
 static void gdb_log_incoming_packet(char *packet)
 {
+#if (GDB_LOG_PACKETS == 0)
 	if (!LOG_LEVEL_IS(LOG_LVL_DEBUG))
 		return;
+#endif
 
 	/* Avoid dumping non-printable characters to the terminal */
 	const unsigned packet_len = strlen(packet);
@@ -375,25 +381,27 @@ static void gdb_log_incoming_packet(char *packet)
 		if (packet_prefix_printable) {
 			const unsigned int prefix_len = colon - packet + 1;  /* + 1 to include the ':' */
 			const unsigned int payload_len = packet_len - prefix_len;
-			LOG_DEBUG("received packet: %.*s<binary-data-%u-bytes>", prefix_len, packet, payload_len);
+			LOG_INFO("-> %.*s<binary-data-%u-bytes>", prefix_len, packet, payload_len);
 		} else {
-			LOG_DEBUG("received packet: <binary-data-%u-bytes>", packet_len);
+			LOG_INFO("-> <binary-data-%u-bytes>", packet_len);
 		}
 	} else {
 		/* All chars printable, dump the packet as is */
-		LOG_DEBUG("received packet: %s", packet);
+		LOG_INFO("-> %s", packet);
 	}
 }
 
 static void gdb_log_outgoing_packet(char *packet_buf, unsigned int packet_len, unsigned char checksum)
 {
+#if (GDB_LOG_PACKETS == 0)
 	if (!LOG_LEVEL_IS(LOG_LVL_DEBUG))
 		return;
+#endif
 
 	if (find_nonprint_char(packet_buf, packet_len))
-		LOG_DEBUG("sending packet: $<binary-data-%u-bytes>#%2.2x", packet_len, checksum);
+		LOG_INFO("<- $<binary-data-%u-bytes>#%2.2x", packet_len, checksum);
 	else
-		LOG_DEBUG("sending packet: $%.*s#%2.2x'", packet_len, packet_buf, checksum);
+		LOG_INFO("<- $%.*s#%2.2x'", packet_len, packet_buf, checksum);
 }
 
 static int gdb_put_packet_inner(struct connection *connection,
@@ -810,10 +818,14 @@ static void gdb_signal_reply(struct target *target, struct connection *connectio
 		}
 
 		current_thread[0] = '\0';
-		if (target->rtos)
-			snprintf(current_thread, sizeof(current_thread), "thread:%" PRIx64 ";",
-					target->rtos->current_thread);
 
+		/* BHDT: If RTOS is detected but no threads are running - it will always report
+		 * single thread with ID #1. Always pass Thread ID to the GDB or it will start guessing */
+		threadid_t thread_id = 1;
+		if (target->rtos && target->rtos->current_thread)
+			thread_id = target->rtos->current_thread;
+
+		snprintf(current_thread, sizeof(current_thread), "thread:%" PRIx64 ";", thread_id);
 		sig_reply_len = snprintf(sig_reply, sizeof(sig_reply), "T%2.2x%s%s",
 				signal_var, stop_reason, current_thread);
 
@@ -1099,14 +1111,22 @@ static int gdb_connection_closed(struct connection *connection)
 	/* if this connection registered a debug-message receiver delete it */
 	delete_debug_msg_receiver(connection->cmd_ctx, target);
 
-	free(connection->priv);
-	connection->priv = NULL;
-
 	target_unregister_event_callback(gdb_target_callback_event_handler, connection);
 
 	target_call_event_callbacks(target, TARGET_EVENT_GDB_END);
 
-	target_call_event_callbacks(target, TARGET_EVENT_GDB_DETACH);
+	/* call TARGET_EVENT_GDB_DETACH only if we are actually attached to the process */
+	if (gdb_connection->attached) {
+		gdb_connection->attached = false;
+		target_call_event_callbacks(target, TARGET_EVENT_GDB_DETACH);
+	}
+
+	/* Cleanup rtos data structures, force rtos auto-detection when
+	 * next gdb connection is made */
+	rtos_cleanup(target);
+
+	free(connection->priv);
+	connection->priv = NULL;
 
 	return ERROR_OK;
 }
@@ -1123,7 +1143,7 @@ static int gdb_last_signal_packet(struct connection *connection,
 {
 	struct target *target = get_target_from_connection(connection);
 	struct gdb_connection *gdb_con = connection->priv;
-	char sig_reply[4];
+	char sig_reply[65];
 	int signal_var;
 
 	if (!gdb_con->attached) {
@@ -1135,8 +1155,16 @@ static int gdb_last_signal_packet(struct connection *connection,
 
 	signal_var = gdb_last_signal(target);
 
-	snprintf(sig_reply, 4, "S%2.2x", signal_var);
-	gdb_put_packet(connection, sig_reply, 3);
+	/* BHDT: If RTOS is detected but no threads are running - it will always report
+	 * single thread with ID #1. Always pass Thread ID to the GDB or it will start guessing */
+	threadid_t thread_id = 1;
+	if (target->rtos && target->rtos->current_thread)
+		thread_id = target->rtos->current_thread;
+
+	int sig_reply_len = snprintf(sig_reply, sizeof(sig_reply), "T%2.2xthread:%" PRIx64 ";",
+			signal_var, thread_id);
+
+	gdb_put_packet(connection, sig_reply, sig_reply_len);
 
 	return ERROR_OK;
 }
@@ -2502,7 +2530,7 @@ static int gdb_generate_thread_list(struct target *target, char **thread_list_ou
 		   "<?xml version=\"1.0\"?>\n"
 		   "<threads>\n");
 
-	if (rtos) {
+	if (rtos && rtos->thread_count) {
 		for (int i = 0; i < rtos->thread_count; i++) {
 			struct thread_detail *thread_detail = &rtos->thread_details[i];
 
@@ -2527,6 +2555,10 @@ static int gdb_generate_thread_list(struct target *target, char **thread_list_ou
 			xml_printf(&retval, &thread_list, &pos, &size,
 				   "</thread>\n");
 		}
+	} else {
+		/* Always report at least one thread to GDB  */
+		xml_printf(&retval, &thread_list, &pos, &size,
+				   "<thread id=\"1\">Name: Current Execution</thread>\n");
 	}
 
 	xml_printf(&retval, &thread_list, &pos, &size,
@@ -2813,7 +2845,6 @@ static bool gdb_handle_vcont_packet(struct connection *connection, const char *p
 	/* single-step or step-over-breakpoint */
 	if (parse[0] == 's') {
 		gdb_running_type = 's';
-		bool fake_step = false;
 
 		if (strncmp(parse, "s:", 2) == 0) {
 			struct target *ct = target;
@@ -2828,20 +2859,6 @@ static bool gdb_handle_vcont_packet(struct connection *connection, const char *p
 			if (endp) {
 				packet_size -= endp - parse;
 				parse = endp;
-			}
-
-			if (target->rtos) {
-				/* FIXME: why is this necessary? rtos state should be up-to-date here already! */
-				rtos_update_threads(target);
-
-				target->rtos->gdb_target_for_threadid(connection, thread_id, &ct);
-
-				/*
-				 * check if the thread to be stepped is the current rtos thread
-				 * if not, we must fake the step
-				 */
-				if (target->rtos->current_thread != thread_id)
-					fake_step = true;
 			}
 
 			if (parse[0] == ';') {
@@ -2879,29 +2896,6 @@ static bool gdb_handle_vcont_packet(struct connection *connection, const char *p
 			log_add_callback(gdb_log_callback, connection);
 			target_call_event_callbacks(ct, TARGET_EVENT_GDB_START);
 
-			/*
-			 * work around an annoying gdb behaviour: when the current thread
-			 * is changed in gdb, it assumes that the target can follow and also
-			 * make the thread current. This is an assumption that cannot hold
-			 * for a real target running a multi-threading OS. We just fake
-			 * the step to not trigger an internal error in gdb. See
-			 * https://sourceware.org/bugzilla/show_bug.cgi?id=22925 for details
-			 */
-			if (fake_step) {
-				int sig_reply_len;
-				char sig_reply[128];
-
-				LOG_DEBUG("fake step thread %"PRIx64, thread_id);
-
-				sig_reply_len = snprintf(sig_reply, sizeof(sig_reply),
-										 "T05thread:%016"PRIx64";", thread_id);
-
-				gdb_put_packet(connection, sig_reply, sig_reply_len);
-				log_remove_callback(gdb_log_callback, connection);
-
-				return true;
-			}
-
 			/* support for gdb_sync command */
 			if (gdb_connection->sync) {
 				gdb_connection->sync = false;
@@ -2937,6 +2931,54 @@ static bool gdb_handle_vcont_packet(struct connection *connection, const char *p
 		return true;
 	}
 
+	return false;
+}
+
+static bool smart_program;
+
+static bool is_same_data(struct target *target, struct image *image) {
+	if(!target->type->checksum_memory)
+		return false;
+
+	int hr;
+	uint8_t *data;
+
+	for (unsigned int sect_idx = 0; sect_idx < image->num_sections; sect_idx++) {
+		struct imagesection *section = &image->sections[sect_idx];
+
+		struct flash_bank *bank;
+		get_flash_bank_by_addr(target, section->base_address, true, &bank);
+		if(bank)
+			bank->driver->probe(bank);
+
+		data = malloc(section->size);
+
+		size_t size_read;
+		hr = image_read_section(image, sect_idx, 0, section->size, data, &size_read);
+		if(hr != ERROR_OK || size_read != section->size)
+			goto cleanup;
+
+		uint32_t img_crc;
+		hr = image_calculate_checksum(data, section->size, &img_crc);
+		if(hr != ERROR_OK)
+			goto cleanup;
+
+		uint32_t flash_crc;
+		hr = target_checksum_memory(target, section->base_address, section->size, &flash_crc);
+		if(hr != ERROR_OK)
+			goto cleanup;
+
+		if(img_crc != flash_crc)
+			goto cleanup;
+
+		free(data);
+	}
+
+	LOG_INFO("All data matches, Flash programming skipped");
+	return true;
+
+cleanup:
+	free(data);
 	return false;
 }
 
@@ -3092,6 +3134,9 @@ static int gdb_v_packet(struct connection *connection,
 			return ERROR_SERVER_REMOTE_CLOSED;
 		}
 
+		if(smart_program)
+			goto skip_erase;
+
 		/* assume all sectors need erasing - stops any problems
 		 * when flash_write is called multiple times */
 		flash_set_dirty();
@@ -3119,6 +3164,7 @@ static int gdb_v_packet(struct connection *connection,
 			gdb_send_error(connection, EIO);
 			LOG_ERROR("flash_erase returned %i", result);
 		} else
+skip_erase:
 			gdb_put_packet(connection, "OK", 2);
 
 		return ERROR_OK;
@@ -3159,6 +3205,9 @@ static int gdb_v_packet(struct connection *connection,
 	}
 
 	if (strncmp(packet, "vFlashDone", 10) == 0) {
+		if(is_same_data(target, gdb_connection->vflash_image))
+			goto skip_program;
+
 		uint32_t written;
 
 		/* process the flashing buffer. No need to erase as GDB
@@ -3166,7 +3215,7 @@ static int gdb_v_packet(struct connection *connection,
 		target_call_event_callbacks(target,
 				TARGET_EVENT_GDB_FLASH_WRITE_START);
 		result = flash_write(target, gdb_connection->vflash_image,
-			&written, false);
+			&written, smart_program);
 		target_call_event_callbacks(target,
 			TARGET_EVENT_GDB_FLASH_WRITE_END);
 		if (result != ERROR_OK) {
@@ -3176,6 +3225,7 @@ static int gdb_v_packet(struct connection *connection,
 				gdb_send_error(connection, EIO);
 		} else {
 			LOG_DEBUG("wrote %u bytes from vFlash image to flash", (unsigned)written);
+skip_program:
 			gdb_put_packet(connection, "OK", 2);
 		}
 
@@ -3190,14 +3240,36 @@ static int gdb_v_packet(struct connection *connection,
 	return ERROR_OK;
 }
 
+/*
+ * A detach is called for both a gdb-exit and an explicit detach by the user
+ * we can't tell which is which. User can also disconnect first in which case
+ * a 'detach' packet will never come which leaves the progran in whatever state
+ * it is in which is what is expected.
+ */
 static int gdb_detach(struct connection *connection)
 {
-	/*
-	 * Only reply "OK" to GDB
-	 * it will close the connection and this will trigger a call to
-	 * gdb_connection_closed() that will in turn trigger the event
-	 * TARGET_EVENT_GDB_DETACH
-	 */
+	struct gdb_connection *gdb_con = connection->priv;
+
+	if (!gdb_con) {
+		/* When a detach is immediately followed by a disconnect (port closed) we can actually
+		 * get a detach after a disconnect has already taken place. Not sure how this is possible.
+		 * Very hard to duplicate, but protect ourselves just in case */
+		LOG_ERROR("Detach received aftr a disconnect.");
+		return ERROR_FAIL;
+	}
+
+	if (gdb_con->attached) {
+		struct target *target = get_target_from_connection(connection);
+
+		breakpoint_clear_target(target);
+		watchpoint_clear_target(target);
+		if (target->state == TARGET_HALTED)
+			target_resume(target, 1, 0, 0, 0);
+
+		gdb_con->attached = false;
+		target_call_event_callbacks(target, TARGET_EVENT_GDB_DETACH);
+	}
+
 	return gdb_put_packet(connection, "OK", 2);
 }
 
@@ -3249,7 +3321,7 @@ static int gdb_fileio_response_packet(struct connection *connection,
 	return ERROR_OK;
 }
 
-static void gdb_log_callback(void *priv, const char *file, unsigned line,
+static void gdb_log_callback(void *priv, enum log_levels level, const char *file, unsigned line,
 		const char *function, const char *string)
 {
 	struct connection *connection = priv;
@@ -3265,9 +3337,29 @@ static void gdb_log_callback(void *priv, const char *file, unsigned line,
 
 static void gdb_sig_halted(struct connection *connection)
 {
-	char sig_reply[4];
-	snprintf(sig_reply, 4, "T%2.2x", 2);
-	gdb_put_packet(connection, sig_reply, 3);
+	int sig_reply_len;
+	char sig_reply[128];
+	struct target *target = get_target_from_connection(connection);
+	struct rtos *rtos = target->rtos;
+
+	/* BHDT: If RTOS is detected but no threads are running - it will always report
+	 * single thread with ID #1. Always pass Thread ID to the GDB or it will start guessing */
+
+	/* Report which thread was actually stopped. gdb can now know what the current thread
+	 * is. Avoid guess work trickles all the up to GUIs for next set of operations
+	 * Also partially avoids https://sourceware.org/bugzilla/show_bug.cgi?id=22925
+	 */
+
+	threadid_t thread_id = 1;
+	if (rtos && rtos->current_thread) {
+		rtos->current_threadid = rtos->current_thread;
+		thread_id = rtos->current_thread;
+	}
+
+	sig_reply_len = snprintf(sig_reply, sizeof(sig_reply),
+							"T05thread:%016"PRIx64";", thread_id);
+
+	gdb_put_packet(connection, sig_reply, sig_reply_len);
 }
 
 static int gdb_input_inner(struct connection *connection)
@@ -3498,11 +3590,12 @@ static int gdb_input_inner(struct connection *connection)
 					retval = target_poll(t);
 				if (retval != ERROR_OK)
 					target_call_event_callbacks(target, TARGET_EVENT_GDB_HALT);
-				gdb_con->ctrl_c = false;
 			} else {
 				LOG_INFO("The target is not running when halt was requested, stopping GDB.");
 				target_call_event_callbacks(target, TARGET_EVENT_GDB_HALT);
 			}
+			/* clear it here so we don't repeat the above message repeately for a stale ctrl_c */
+			gdb_con->ctrl_c = 0;
 		}
 
 	} while (gdb_con->buf_cnt > 0);
@@ -3771,6 +3864,15 @@ out:
 	return retval;
 }
 
+COMMAND_HANDLER(handle_gdb_smart_program)
+{
+	if (CMD_ARGC != 1)
+		return ERROR_COMMAND_SYNTAX_ERROR;
+
+	COMMAND_PARSE_ENABLE(CMD_ARGV[0], smart_program);
+	return ERROR_OK;
+}
+
 static const struct command_registration gdb_command_handlers[] = {
 	{
 		.name = "gdb_sync",
@@ -3843,6 +3945,13 @@ static const struct command_registration gdb_command_handlers[] = {
 		.mode = COMMAND_EXEC,
 		.help = "Save the target description file",
 		.usage = "",
+	},
+	{
+		.name = "gdb_smart_program",
+		.handler = handle_gdb_smart_program,
+		.mode = COMMAND_ANY,
+		.help = "enable or disable smart program mode",
+		.usage = "('enable'|'disable')",
 	},
 	COMMAND_REGISTRATION_DONE
 };

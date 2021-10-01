@@ -1081,10 +1081,11 @@ static int cortex_m_step(struct target *target, int current,
 						retval = mem_ap_read_atomic_u32(armv7m->debug_ap,
 								DCB_DHCSR,
 								&cortex_m->dcb_dhcsr);
-						if (retval != ERROR_OK) {
-							target->state = TARGET_UNKNOWN;
-							return retval;
-						}
+
+						/* BHDT: Do not return here! Breakpoint has been added so it has to be removed */
+						if (retval != ERROR_OK)
+							break;
+
 						isr_timed_out = ((timeval_ms() - t_start) > 500);
 					} while (!((cortex_m->dcb_dhcsr & S_HALT) || isr_timed_out));
 
@@ -1094,6 +1095,13 @@ static int cortex_m_step(struct target *target, int current,
 					else {
 						/* Remove the temporary breakpoint */
 						breakpoint_remove(target, pc_value);
+					}
+
+					/* BHDT: Now it is safe to return an error */
+					if (retval != ERROR_OK) {
+						register_cache_invalidate(armv7m->arm.core_cache);
+						target->state = TARGET_UNKNOWN;
+						return retval;
 					}
 
 					if (isr_timed_out) {
@@ -1266,6 +1274,9 @@ static int cortex_m_assert_reset(struct target *target)
 				? AIRCR_SYSRESETREQ : AIRCR_VECTRESET));
 		if (retval3 != ERROR_OK)
 			LOG_DEBUG("Ignoring AP write error right after reset");
+
+		/* BHDT: Sleep even after soft-reset */
+		jtag_sleep(jtag_get_nsrst_delay() * 1000u);
 
 		retval3 = dap_dp_init_or_reconnect(armv7m->debug_ap->dap);
 		if (retval3 != ERROR_OK) {

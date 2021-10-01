@@ -283,7 +283,7 @@ int parse_cmdline_args(struct command_context *cmd_ctx, int argc, char *argv[])
 		/* getopt_long stores the option index here. */
 		int option_index = 0;
 
-		c = getopt_long(argc, argv, "hvd::l:f:s:c:p", long_options, &option_index);
+		c = getopt_long(argc, argv, "hvd::l:f:s:c:g", long_options, &option_index);
 
 		/* Detect the end of the options. */
 		if (c == -1)

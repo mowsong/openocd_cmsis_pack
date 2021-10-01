@@ -1,12 +1,13 @@
-### Cypress OpenOCD v4.2.0 Release Notes
+### Cypress OpenOCD v4.3.0 Release Notes
 
 Please refer to the README.md for a complete description of the Cypress customized version of OpenOCD.
 
 ### New Features
 
-- Adds support of devices from new PMG1 product line
-- Adds supports of chip protection programming for PSoC 4 MCUs
-- Delivers fixes for various defects
+- Adds support external serial memory flashing of PSOC™ 6 MCUs via the Serial Flash Discoverable Parameters (SFDP) standard to query the attached flash memory at runtime.
+- Improves support of CYW43907 and CYW53907 devices 
+- Adds support of CCG4, CCG3PA and CCG7D devices 
+- Delivers few minor improvements and fixes for various defects
 
 ### Known Issues
 
@@ -18,6 +19,7 @@ Please refer to the README.md for a complete description of the Cypress customiz
 |  PROGTOOLS-2388 | PSoC 64 Secure MCUs do not support the programming and debugging via JTAG interface.  It is because of the specifics of PSoC 64 MCUs - JTAG pins are configured after unpredictable amount of time after what causes a lot of warnings during programming via JTAG. | Use SWD interface with PSoC 64 Secure MCUs.  |
 |  PROGTOOLS-2238 | Unable to acquire PSoC4 target with J-Link probe if target is in PROTECTED state. J-Link probe does not support device acquisition in Test Mode. This prevents invocation of SROM API making it impossible to re-program or erase the chip in PROTECTED state. | The workaround is to unprotect/erase the chip using MiniProg4 or KitProg3 probe.  |
 |  PROGTOOLS-2099 | A “Failed to read memory at <address>” message may appear in “Memory View” of IDE when connected via the MiniProg4 probe and try to read memory from invalid address. | You can safely ignore this error.  |
+|  PROGTOOLS-912 | Programming the S25FS512S external memory device mounted on the CYW9P62S1-43012EVB-01 kit might not work if SFDP auto-detection is selected in the QSPI Configurator. This is caused by corrupted SFDP table in this memory. | Select "S25FS512S" instead of "Auto detect SFDP" for the memory slot in the QSPI Configurator.  |
 
 ### More information
 
@@ -34,4 +36,4 @@ Please refer to the README.md for a complete description of the Cypress customiz
 
 -   [Cypress Semiconductor, an Infineon Technologies Company](http://www.cypress.com)
 
-© Cypress Semiconductor Corporation, 2020.
+© Cypress Semiconductor Corporation, 2020-2021. This document is the property of Cypress Semiconductor Corporation, an Infineon Technologies company, and its affiliates ("Cypress"). 

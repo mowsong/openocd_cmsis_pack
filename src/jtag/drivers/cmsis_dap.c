@@ -20,12 +20,6 @@
  *   Copyright (C) 2013 by Spencer Oliver                                  *
  *   spen@spen-soft.co.uk                                                  *
  *                                                                         *
- *   Copyright (C) 2019 by Bohdan Tymkiv, Mykola Tuzyak                    *
- *   bohdan.tymkiv@cypress.com bohdan200@gmail.com                         *
- *   mykola.tyzyak@cypress.com                                             *
- *                                                                         *
- *   Copyright (C) <2019-2020> < Cypress Semiconductor Corporation >       *
- *                                                                         *
  *   This program is free software; you can redistribute it and/or modify  *
  *   it under the terms of the GNU General Public License as published by  *
  *   the Free Software Foundation; either version 2 of the License, or     *
@@ -51,6 +45,7 @@
 #include <jtag/commands.h>
 #include <jtag/tcl.h>
 #include <target/cortex_m.h>
+#include <helper/time_support.h>
 
 #include "cmsis_dap.h"
 
@@ -61,6 +56,10 @@ static const struct cmsis_dap_backend *const cmsis_dap_backends[] = {
 
 #if BUILD_CMSIS_DAP_HID == 1
 	&cmsis_dap_hid_backend,
+#endif
+
+#if BUILD_CMSIS_DAP_USB == 1
+	&cmsis_dap_usb_backend_async,
 #endif
 };
 
@@ -225,6 +224,8 @@ static const char * const info_caps_str[INFO_CAPS__NUM_CAPS] = {
 	"SWO streaming trace supported",
 	"UART communication port supported",
 	"UART via USB COM port supported",
+};
+
 struct pending_transfer_result {
 	uint8_t cmd;
 	uint32_t data;
@@ -249,7 +250,10 @@ struct pending_scan_result {
 
 /* Up to MIN(packet_count, MAX_PENDING_REQUESTS) requests may be issued
  * until the first response arrives */
-#define MAX_PENDING_REQUESTS 32
+
+/* BHDT: HIDAPI on MacOS starts to drop outstanding IN packets when there are more
+ * than 30 of them. Lets stay on the safe side and limit number of pending requests */
+#define MAX_PENDING_REQUESTS 28
 
 /* Pending requests are organized as a FIFO - circular buffer */
 /* Each block in FIFO can contain up to pending_queue_len transfers */
@@ -274,8 +278,30 @@ static int queued_retval;
 
 static uint8_t output_pins = SWJ_PIN_SRST | SWJ_PIN_TRST;
 
-static struct cmsis_dap *cmsis_dap_handle;
+struct cmsis_dap *cmsis_dap_handle;
 
+
+static uint16_t stats_period;
+static size_t tx_bytes;
+static size_t rx_bytes;
+
+static void cmsis_dap_print_stats(void)
+{
+	static int64_t tv;
+
+	if(!stats_period)
+		return;
+
+	int64_t period_ms = timeval_ms() - tv;
+	if(period_ms >= stats_period) {
+		tv = timeval_ms();
+		LOG_INFO("FIFO level: %d, TX: %zu KBps, RX: %zu KBps",
+				 pending_fifo_block_count,
+				 (1000 * tx_bytes) / (period_ms * 1024),
+				 (1000 * rx_bytes) / (period_ms * 1024));
+		tx_bytes = rx_bytes = 0;
+	}
+}
 
 static int cmsis_dap_quit(void);
 
@@ -311,35 +337,19 @@ static int cmsis_dap_open(void)
 		return ERROR_FAIL;
 	}
 
-	dap->is_hid = is_hid;
-	if (is_hid) {
-	dap->dev_handle = dev;
-		dap->bulk_handle = NULL;
-	} else {
-		dap->bulk_handle = usb_device_handle;
-		dap->hid_handle = NULL;
-		}
-
-	dap->usb_ctx = usb_ctx;
+	dap->backend = backend;
 
 	cmsis_dap_handle = dap;
 
-	if (target_vid == 0x03eb && target_pid != 0x2145 && target_pid != 0x2175)
 	return ERROR_OK;
 }
 
 static void cmsis_dap_close(struct cmsis_dap *dap)
 {
-	hid_close(dap->dev_handle);
+	if (dap->backend) {
+		dap->backend->close(dap);
 		dap->backend = NULL;
-		dap->hid_handle = NULL;
-	} else {
-		libusb_release_interface(dap->bulk_handle, 0);
-		libusb_close(dap->bulk_handle);
-		libusb_exit(dap->usb_ctx);
-		dap->bulk_handle = NULL;
 	}
-
 
 	free(cmsis_dap_handle->packet_buffer);
 	free(cmsis_dap_handle);
@@ -353,58 +363,28 @@ static void cmsis_dap_close(struct cmsis_dap *dap)
 	}
 }
 
-static int cmsis_dap_usb_write(struct cmsis_dap *dap, int txlen)
+static void cmsis_dap_flush_read(struct cmsis_dap *dap)
 {
 	unsigned int i;
 	/* Some CMSIS-DAP adapters keep buffered packets over
 	 * USB close/open so we need to flush up to 64 old packets
 	 * to be sure all buffers are empty */
 	for (i = 0; i < 64; i++) {
-	memset(dap->packet_buffer + txlen, 0, dap->packet_size - txlen);
+		int retval = dap->backend->read(dap, 10);
 		if (retval == ERROR_TIMEOUT_REACHED)
 			break;
-	/* write data to device */
-	int retval = hid_write(dap->dev_handle, dap->packet_buffer, dap->packet_size);
-		LOG_ERROR("error writing data: %ls", hid_error(dap->dev_handle));
-		}
-	} else {
-		int retval = libusb_bulk_transfer(dap->bulk_handle, (1 | LIBUSB_ENDPOINT_OUT),
-				dap->packet_buffer + 1, txlen - 1, NULL, USB_TIMEOUT);
-		if (retval != 0) {
-			LOG_ERROR("error writing data: %s", libusb_error_name(retval));
-			return ERROR_FAIL;
-		}
 	}
-	return ERROR_OK;
-}
 	if (i)
-int cmsis_dap_usb_read(struct cmsis_dap *dap)
-{
-	if(dap->is_hid) {
-		hid_read_timeout(dap->hid_handle, dap->packet_buffer, dap->packet_size, USB_TIMEOUT);
-	} else {
-		int retval = libusb_bulk_transfer(dap->bulk_handle, (2 | LIBUSB_ENDPOINT_IN),
-						dap->packet_buffer, dap->packet_size - 1, NULL, USB_TIMEOUT);
-		if (retval != 0) {
-			LOG_DEBUG("error reading data: %s", libusb_error_name(retval));
-			return ERROR_FAIL;
-		}
-	}
-
 		LOG_DEBUG("Flushed %u packets", i);
 }
 
 /* Send a message and receive the reply */
 static int cmsis_dap_xfer(struct cmsis_dap *dap, int txlen)
 {
-	int retval;
-
 	if (pending_fifo_block_count) {
 		LOG_ERROR("pending %d blocks, flushing", pending_fifo_block_count);
 		while (pending_fifo_block_count) {
-			hid_read_timeout(dap->dev_handle, dap->packet_buffer, dap->packet_size, 10);
-			if(retval != ERROR_OK)
-				return retval;
+			dap->backend->read(dap, 10);
 			pending_fifo_block_count--;
 		}
 		pending_fifo_put_idx = 0;
@@ -412,14 +392,18 @@ static int cmsis_dap_xfer(struct cmsis_dap *dap, int txlen)
 	}
 
 	uint8_t current_cmd = cmsis_dap_handle->command[0];
-	int retval = cmsis_dap_usb_write(dap, txlen);
+	int retval = dap->backend->write(dap, txlen, USB_TIMEOUT);
 	if (retval < 0)
 		return retval;
 
-	retval = cmsis_dap_usb_read(dap);
-	retval = hid_read_timeout(dap->dev_handle, dap->packet_buffer, dap->packet_size, USB_TIMEOUT);
-	if (retval == -1 || retval == 0) {
-		LOG_DEBUG("error reading data: %ls", hid_error(dap->dev_handle));
+	tx_bytes += retval;
+
+	/* get reply */
+	retval = dap->backend->read(dap, USB_TIMEOUT);
+	if (retval < 0)
+		return retval;
+
+	rx_bytes += retval;
 
 	uint8_t *resp = cmsis_dap_handle->response;
 	if (resp[0] == DAP_ERROR) {
@@ -432,7 +416,8 @@ static int cmsis_dap_xfer(struct cmsis_dap *dap, int txlen)
 			 " received 0x%" PRIx8, current_cmd, resp[0]);
 
 		cmsis_dap_flush_read(dap);
-		return retval;
+		return ERROR_FAIL;
+	}
 
 	return ERROR_OK;
 }
@@ -847,9 +832,9 @@ static void cmsis_dap_swd_write_from_queue(struct cmsis_dap *dap)
 		uint32_t data = transfer->data;
 
 		LOG_DEBUG_IO("%s %s reg %x %"PRIx32,
-				cmd & SWD_CMD_APnDP ? "AP" : "DP",
-				cmd & SWD_CMD_RnW ? "read" : "write",
-				(cmd & SWD_CMD_A32) >> 1, data);
+				cmd & SWD_CMD_APNDP ? "AP" : "DP",
+				cmd & SWD_CMD_RNW ? "read" : "write",
+			  (cmd & SWD_CMD_A32) >> 1, data);
 
 		/* When proper WAIT handling is implemented in the
 		 * common SWD framework, this kludge can be
@@ -864,8 +849,8 @@ static void cmsis_dap_swd_write_from_queue(struct cmsis_dap *dap)
 		 */
 		if (!(cmd & SWD_CMD_RNW) &&
 		    !(cmd & SWD_CMD_APNDP) &&
-			(cmd & SWD_CMD_A32) >> 1 == DP_CTRL_STAT &&
-			(data & CORUNDETECT)) {
+		    (cmd & SWD_CMD_A32) >> 1 == DP_CTRL_STAT &&
+		    (data & CORUNDETECT)) {
 			LOG_DEBUG("refusing to enable sticky overrun detection");
 			data &= ~CORUNDETECT;
 		}
@@ -885,6 +870,8 @@ static void cmsis_dap_swd_write_from_queue(struct cmsis_dap *dap)
 		queued_retval = ERROR_OK;
 	}
 
+	tx_bytes += retval;
+
 	pending_fifo_put_idx = (pending_fifo_put_idx + 1) % dap->packet_count;
 	pending_fifo_block_count++;
 	if (pending_fifo_block_count > dap->packet_count)
@@ -900,18 +887,23 @@ static void cmsis_dap_swd_read_process(struct cmsis_dap *dap, int timeout_ms)
 {
 	struct pending_request_block *block = &pending_fifo[pending_fifo_get_idx];
 
+	cmsis_dap_print_stats();
+
 	if (pending_fifo_block_count == 0)
 		LOG_ERROR("no pending write");
 
-
 	/* get reply */
-	int retval = hid_read_timeout(dap->dev_handle, dap->packet_buffer, dap->packet_size, timeout_ms);
-	if (retval == 0 && timeout_ms < USB_TIMEOUT)
-	if (retval == -1 || retval == 0) {
-		LOG_DEBUG("error reading data: %ls", hid_error(dap->dev_handle));
+	int retval = dap->backend->read(dap, timeout_ms);
+	if (retval == ERROR_TIMEOUT_REACHED && timeout_ms < USB_TIMEOUT)
+		return;
+
+	if (retval <= 0) {
+		LOG_DEBUG("error reading data");
 		queued_retval = ERROR_FAIL;
 		goto skip;
 	}
+
+	rx_bytes += retval;
 
 	uint8_t *resp = dap->response;
 	if (resp[0] != CMD_DAP_TFER) {
@@ -936,12 +928,9 @@ static void cmsis_dap_swd_read_process(struct cmsis_dap *dap, int timeout_ms)
 		goto skip;
 	}
 
-	if (block->transfer_count != buffer[1])
-		LOG_ERROR("CMSIS-DAP transfer count mismatch: expected %d, got %d, his is fatal",
+	if (block->transfer_count != transfer_count)
+		LOG_ERROR("CMSIS-DAP transfer count mismatch: expected %d, got %d",
 			  block->transfer_count, transfer_count);
-
-		exit(-1);
-	}
 
 	LOG_DEBUG_IO("Received results of %d queued transactions FIFO index %d",
 		 transfer_count, pending_fifo_get_idx);
@@ -958,7 +947,7 @@ static void cmsis_dap_swd_read_process(struct cmsis_dap *dap, int timeout_ms)
 
 			/* Imitate posted AP reads */
 			if ((transfer->cmd & SWD_CMD_APNDP) ||
-				((transfer->cmd & SWD_CMD_A32) >> 1 == DP_RDBUFF)) {
+			    ((transfer->cmd & SWD_CMD_A32) >> 1 == DP_RDBUFF)) {
 				tmp = last_read;
 				last_read = data;
 			}
@@ -976,6 +965,16 @@ skip:
 
 static int cmsis_dap_swd_run_queue(void)
 {
+	/* BHDT: I do not understand why this is needed, number of FIFO packets in the probe
+	 * will never exceed dap->packet_count because backend->read() is forced in case FIFO
+	 * gets full after backend->write(), see cmsis_dap_swd_queue_cmd() below.
+	 * Add assert() just to be sure FIFO is not overrun.
+
+	if (pending_fifo_block_count)
+		cmsis_dap_swd_read_process(cmsis_dap_handle, 0);
+	*/
+
+	assert(pending_fifo_block_count < cmsis_dap_handle->packet_count);
 	cmsis_dap_swd_write_from_queue(cmsis_dap_handle);
 
 	while (pending_fifo_block_count)
@@ -990,17 +989,30 @@ static int cmsis_dap_swd_run_queue(void)
 	return retval;
 }
 
-
+static uint8_t alive_to;
 static void cmsis_dap_swd_queue_cmd(uint8_t cmd, uint32_t *dst, uint32_t data)
 {
+	/* BHDT: For really low SWD clocks or slow USB when running in VM */
+	if (!alive_to++)
+		keep_alive();
+
 	bool targetsel_cmd = swd_cmd(false, false, DP_TARGETSEL) == cmd;
 
 	if (pending_fifo[pending_fifo_put_idx].transfer_count == pending_queue_len
 			 || targetsel_cmd) {
+		/* BHDT: I do not understand what the following code is intended for,
+		 * but it breaks whole FIFO logic so pending_fifo_block_count is
+		 * always equal to one and no queuing is performed
+
+		if (pending_fifo_block_count)
+			cmsis_dap_swd_read_process(cmsis_dap_handle, 0);
+		*/
+
 		/* Not enough room in the queue. Run the queue. */
 		cmsis_dap_swd_write_from_queue(cmsis_dap_handle);
+		assert(pending_fifo_block_count <= cmsis_dap_handle->packet_count);
 
-		if (pending_fifo_block_count >= cmsis_dap_handle->packet_count)
+		if (pending_fifo_block_count == cmsis_dap_handle->packet_count)
 			cmsis_dap_swd_read_process(cmsis_dap_handle, USB_TIMEOUT);
 	}
 
@@ -1179,16 +1191,6 @@ static int cmsis_dap_swd_switch_seq(enum swd_special_seq seq)
 		s = swd_seq_dormant_to_swd;
 		s_len = swd_seq_dormant_to_swd_len;
 		break;
-	case JTAG_TO_DORMANT:
-		LOG_DEBUG("JTAG-to-DORMANT");
-		s = swd_seq_jtag_to_dormant;
-		s_len = swd_seq_jtag_to_dormant_len;
-		break;
-	case DORMANT_TO_JTAG:
-		LOG_DEBUG("DORMANT-to-JTAG");
-		s = swd_seq_dormant_to_jtag;
-		s_len = swd_seq_dormant_to_jtag_len;
-		break;
 	default:
 		LOG_ERROR("Sequence %d not supported", seq);
 		return ERROR_FAIL;
@@ -1220,25 +1222,6 @@ static int cmsis_dap_swd_open(void)
 	return ERROR_OK;
 }
 
-static int cmsis_dap_clear_buffers(struct cmsis_dap *dap)
-{
-	int hr = ERROR_OK;
-	int read = 0;
-
-	if(dap->is_hid) {
-		read = hid_read_timeout(dap->hid_handle, dap->packet_buffer, dap->packet_size, 50);
-		if(read == 0)
-			hr = ERROR_FAIL;
-	} else {
-		hr = libusb_bulk_transfer(dap->bulk_handle, (2 | LIBUSB_ENDPOINT_IN),
-						dap->packet_buffer, dap->packet_size - 1, &read, 50);
-		if (hr != 0)
-			hr = ERROR_FAIL;
-	}
-
-	return hr;
-}
-
 static int cmsis_dap_init(void)
 {
 	uint8_t *data;
@@ -1247,6 +1230,7 @@ static int cmsis_dap_init(void)
 	if (retval != ERROR_OK)
 		return retval;
 
+	cmsis_dap_flush_read(cmsis_dap_handle);
 
 	retval = cmsis_dap_get_caps_info();
 	if (retval != ERROR_OK)
@@ -1278,7 +1262,7 @@ static int cmsis_dap_init(void)
 		LOG_INFO("CMSIS-DAP: Interface Initialised (JTAG)");
 	}
 
-	/* Be conservative and supress submiting multiple HID requests
+	/* Be conservative and suppress submitting multiple HID requests
 	 * until we get packet count info from the adaptor */
 	cmsis_dap_handle->packet_count = 1;
 	pending_queue_len = 12;
@@ -1328,6 +1312,7 @@ static int cmsis_dap_init(void)
 			goto init_err;
 		}
 	}
+
 	/* Intentionally not checked for error, just logs an info message
 	 * not vital for further debugging */
 	(void)cmsis_dap_get_status();
@@ -1789,8 +1774,8 @@ static void cmsis_dap_pathmove(int num_states, tap_state_t *path)
 static void cmsis_dap_execute_pathmove(struct jtag_command *cmd)
 {
 	LOG_DEBUG_IO("pathmove: %i states, end in %i",
-			  cmd->cmd.pathmove->num_states,
-		   cmd->cmd.pathmove->path[cmd->cmd.pathmove->num_states - 1]);
+		      cmd->cmd.pathmove->num_states,
+	       cmd->cmd.pathmove->path[cmd->cmd.pathmove->num_states - 1]);
 
 	cmsis_dap_pathmove(cmd->cmd.pathmove->num_states, cmd->cmd.pathmove->path);
 }
@@ -1825,7 +1810,7 @@ static void cmsis_dap_runtest(int num_cycles)
 static void cmsis_dap_execute_runtest(struct jtag_command *cmd)
 {
 	LOG_DEBUG_IO("runtest %i cycles, end in %i", cmd->cmd.runtest->num_cycles,
-			  cmd->cmd.runtest->end_state);
+		      cmd->cmd.runtest->end_state);
 
 	cmsis_dap_end_state(cmd->cmd.runtest->end_state);
 	cmsis_dap_runtest(cmd->cmd.runtest->num_cycles);
@@ -2093,6 +2078,16 @@ COMMAND_HANDLER(cmsis_dap_handle_cmd_command)
 	return ERROR_OK;
 }
 
+COMMAND_HANDLER(cmsis_dap_handle_show_stats_command)
+{
+	if (CMD_ARGC != 1)
+		return ERROR_COMMAND_SYNTAX_ERROR;
+
+	COMMAND_PARSE_NUMBER(u16, CMD_ARGV[0], stats_period);
+
+	return ERROR_OK;
+}
+
 COMMAND_HANDLER(cmsis_dap_handle_vid_pid_command)
 {
 	if (CMD_ARGC > MAX_USB_IDS * 2) {
@@ -2170,6 +2165,13 @@ static const struct command_registration cmsis_dap_subcommand_handlers[] = {
 		.usage = "",
 		.help = "issue cmsis-dap command",
 	},
+	{
+		.name = "show_stats",
+		.handler = &cmsis_dap_handle_show_stats_command,
+		.mode = COMMAND_ANY,
+		.usage = "<period (0 to disable)>",
+		.help = "display USB statistic",
+	},
 	COMMAND_REGISTRATION_DONE
 };
 
@@ -2201,7 +2203,7 @@ const struct command_registration cmsis_dap_command_handlers[] = {
 		.handler = &cmsis_dap_handle_backend_command,
 		.mode = COMMAND_CONFIG,
 		.help = "set the communication backend to use (USB bulk or HID).",
-		.usage = "(auto | usb_bulk | hid)",
+		.usage = "(auto | usb_bulk | usb_bulk_async | hid)",
 	},
 #if BUILD_CMSIS_DAP_USB
 	{
@@ -2215,7 +2217,7 @@ const struct command_registration cmsis_dap_command_handlers[] = {
 	COMMAND_REGISTRATION_DONE
 };
 
-const struct swd_driver cmsis_dap_swd_driver = {
+struct swd_driver cmsis_dap_swd_driver = {
 	.init = cmsis_dap_swd_init,
 	.switch_seq = cmsis_dap_swd_switch_seq,
 	.read_reg = cmsis_dap_swd_read_reg,

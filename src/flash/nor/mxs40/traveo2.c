@@ -1,10 +1,11 @@
 /***************************************************************************
  *                                                                         *
  *   Copyright (C) 2019 by Bohdan Tymkiv, Mykola Tuzyak                    *
- *   bohdan.tymkiv@cypress.com bohdan200@gmail.com                         *
- *   mykola.tyzyak@cypress.com                                             *
+ *   bohdan.tymkiv@infineon.com bohdan200@gmail.com                        *
+ *   mykola.tyzyak@infineon.com                                            *
  *                                                                         *
- *   Copyright (C) <2019-2020> < Cypress Semiconductor Corporation >       *
+ *   Copyright (C) <2019-2021>                                             *
+ *     <Cypress Semiconductor Corporation (an Infineon company)>           *
  *                                                                         *
  *   This program is free software; you can redistribute it and/or modify  *
  *   it under the terms of the GNU General Public License as published by  *
@@ -68,7 +69,7 @@
 #define MEM_IPC2_DATA                  (MEM_BASE_IPC2 + 0x0Cu)
 #define MEM_IPC2_LOCK_STATUS           (MEM_BASE_IPC2 + 0x1Cu)
 
-/* Traveo-II registers */
+/* TRAVEO™II registers */
 const struct mxs40_regs traveo2_regs = {
 	.variant = MXS40_VARIANT_TRAVEO_II,
 	.ipc_acquire = MEM_IPC2_ACQUIRE,
@@ -80,6 +81,7 @@ const struct mxs40_regs traveo2_regs = {
 	.vtbase = {MEM_VTBASE2_CM0, MEM_VTBASE2_CM4, 0, },
 	.mem_base_main = {0x10000000, // present on Si and PSVP
 					  0x101F8000, 0x103F0000, 0x10400000, // C2D-4M PSVP
+					  0x10200000, 0x10400000, // CE-4M PSVP
 					  0, // MARKER
 					 },
 	.mem_base_work = {0x14000000, 0,},
@@ -92,7 +94,7 @@ const struct mxs40_regs traveo2_regs = {
 #define MEM_IPC3_DATA                  (MEM_BASE_IPC3 + 0x0Cu)
 #define MEM_IPC3_LOCK_STATUS           (MEM_BASE_IPC3 + 0x1Cu)
 
-/* Traveo-II 8M registers */
+/* TRAVEO™II 8M registers */
 const struct mxs40_regs traveo2_8m_regs = {
 	.variant = MXS40_VARIANT_TRAVEO_II_8M,
 	.ipc_acquire = MEM_IPC3_ACQUIRE,
@@ -123,7 +125,7 @@ static const struct sflash_region traveo2_safe_sflash_regions[4] = {
 };
 
 /** ***********************************************************************************************
- * @brief Configures ECC error reporting on Traveo-II devices
+ * @brief Configures ECC error reporting on TRAVEO™II devices
  * @param target current target
  * @param enabled true if ECC error reporting should be enabled
  * @return ERROR_OK in case of success, ERROR_XXX code otherwise
@@ -194,7 +196,7 @@ static int traveo2_configure_ecc(struct target *target, bool enabled)
 }
 
 /** ***********************************************************************************************
- * @brief Performs initial setup of the Traveo-II target
+ * @brief Performs initial setup of the TRAVEO™II target
  * @param bank The flash bank
  * @return ERROR_OK in case of success, ERROR_XXX code otherwise
  *************************************************************************************************/
@@ -220,7 +222,7 @@ static int traveo2_prepare(struct flash_bank *bank)
 }
 
 /** ***********************************************************************************************
- * @brief Performs Flash Read operation with ECC error reporting. This function is used in Traveo-II
+ * @brief Performs Flash Read operation with ECC error reporting. This function is used in TRAVEO™II
  * devices only since PSoC6 does not support ECC.
  * @param bank The bank to read
  * @param buffer The data bytes read
@@ -366,7 +368,7 @@ error:
 /** ***********************************************************************************************
  * @brief Probes the device and populates related data structures with target flash geometry data.
  * This is done in non-intrusive way, no SROM API calls are involved so GDB can safely attach to a
- * running target. This is for Traveo-II devices only.
+ * running target. This is for TRAVEO™II devices only.
  *
  * @param bank current flash bank
  * @param geometry value in FLASHC.GEONETRY register
@@ -535,6 +537,7 @@ COMMAND_HANDLER(traveo2_handle_ecc_error_reporting_command)
 	return hr;
 }
 
+extern const struct command_registration tv2_wflash_command_handlers[];
 static const struct command_registration tv2_exec_command_handlers[] = {
 	{
 		.name = "ecc_error_reporting",
@@ -542,6 +545,13 @@ static const struct command_registration tv2_exec_command_handlers[] = {
 		.mode = COMMAND_EXEC,
 		.usage = "on|off",
 		.help = "Controls ECC error reporting",
+	},
+	{
+		.name = "wflash",
+		.mode = COMMAND_EXEC,
+		.usage = "",
+		.help = "wflash command group",
+		.chain = tv2_wflash_command_handlers,
 	},
 	{
 		.chain = mxs40_exec_command_handlers,

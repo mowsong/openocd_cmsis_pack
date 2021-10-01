@@ -305,7 +305,7 @@ void log_init(void)
 	}
 
 	if (!log_output)
-		log_output = stderr;
+		log_output = stdout;
 
 	start = last_time = timeval_ms();
 }
@@ -543,7 +543,7 @@ void log_socket_error(const char *socket_desc)
 char *find_nonprint_char(char *buf, unsigned buf_len)
 {
 	for (unsigned int i = 0; i < buf_len; i++) {
-		if (!isprint(buf[i]))
+		if (!isprint(buf[i]) && !isspace(buf[i]))
 			return buf + i;
 	}
 	return NULL;

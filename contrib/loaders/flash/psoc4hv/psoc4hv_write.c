@@ -1,9 +1,10 @@
 /***************************************************************************
  *                                                                         *
  *   Copyright (C) 2020 by Bohdan Tymkiv                                   *
- *   bohdan.tymkiv@cypress.com bohdan200@gmail.com                         *
+ *   bohdan.tymkiv@infineon.com bohdan200@gmail.com                        *
  *                                                                         *
- *   Copyright (C) <2020> < Cypress Semiconductor Corporation >            *
+ *   Copyright (C) <2019-2021>                                             *
+ *     <Cypress Semiconductor Corporation (an Infineon company)>           *
  *                                                                         *
  *   This program is free software; you can redistribute it and/or modify  *
  *   it under the terms of the GNU General Public License as published by  *

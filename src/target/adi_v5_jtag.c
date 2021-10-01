@@ -429,7 +429,7 @@ static int jtagdp_overrun_check(struct adiv5_dap *dap)
 			found_wait = 1;
 			break;
 		} else {
-			LOG_ERROR("Invalid ACK (%1x) in DAP response", el->ack);
+			LOG_DEBUG("Invalid ACK (%1x) in DAP response", el->ack);
 			log_dap_cmd("ERR", el);
 			retval = ERROR_JTAG_DEVICE_ERROR;
 			goto done;
@@ -492,7 +492,7 @@ static int jtagdp_overrun_check(struct adiv5_dap *dap)
 						break;
 					}
 					if (tmp->ack != JTAG_ACK_WAIT) {
-						LOG_ERROR("Invalid ACK (%1x) in DAP response", tmp->ack);
+						LOG_DEBUG("Invalid ACK (%1x) in DAP response", tmp->ack);
 						log_dap_cmd("ERR", tmp);
 						retval = ERROR_JTAG_DEVICE_ERROR;
 						break;
@@ -576,7 +576,7 @@ static int jtagdp_overrun_check(struct adiv5_dap *dap)
 					break;
 				}
 				if (el->ack != JTAG_ACK_WAIT) {
-					LOG_ERROR("Invalid ACK (%1x) in DAP response", el->ack);
+					LOG_DEBUG("Invalid ACK (%1x) in DAP response", el->ack);
 					log_dap_cmd("ERR", el);
 					retval = ERROR_JTAG_DEVICE_ERROR;
 					break;

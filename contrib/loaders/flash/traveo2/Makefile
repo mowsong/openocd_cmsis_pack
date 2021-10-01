@@ -2,42 +2,39 @@ ifeq (x$(TARGET),x)
 $(error TARGET variable not defined!)
 endif
 
-APPLICATION := $(TARGET)
 CPU_FLAGS   := -mthumb -mcpu=cortex-m0plus -msoft-float
-include $(TARGET).mk
+include $(TARGET)/options.mk
 
-LDSCRIPT  ?= flm/flm_linker_script.ld
+CC_SRC := \
+	$(TARGET)/FlashPrg.c \
+	$(TARGET)/FlashDev.c
+	
+AS_SRC    :=
 
 OUT_DIR   :=  out
 VERBOSE_BUILD ?= 0
 
-CROSS_COMPILE ?= arm-none-eabi-
-
-CC_SRC := $(APPLICATION).c flm/FlashDev.c
-AS_SRC    :=
-
-CC       := $(CROSS_COMPILE)gcc
-AS       := $(CROSS_COMPILE)gcc -x assembler-with-cpp
-LD       := $(CROSS_COMPILE)ld
-SIZE     := $(CROSS_COMPILE)size
-READELF  := $(CROSS_COMPILE)readelf
-OBJCOPY  := $(CROSS_COMPILE)objcopy
-OBJDUMP  := $(CROSS_COMPILE)objdump
-STRIP    := $(CROSS_COMPILE)strip
+CC       := arm-none-eabi-gcc
+AS       := arm-none-eabi-gcc -x assembler-with-cpp
+LD       := arm-none-eabi-ld
+SIZE     := arm-none-eabi-size
+READELF  := arm-none-eabi-readelf
+OBJCOPY  := arm-none-eabi-objcopy
+OBJDUMP  := arm-none-eabi-objdump
+STRIP    := arm-none-eabi-strip
 
 CC_OBJ   := $(CC_SRC:.c=.o)
 AS_OBJ   := $(AS_SRC:.s=.o)
 OBJ      := $(CC_OBJ) $(AS_OBJ)
 DEPFILES := $(OBJ:.o=.d)
-
-BUILD_DATE := $(shell LC_ALL=C date "+%D %H:%M")
 OUT_DIR    ?= out/
 
 ##############################################################################################################################
 # Debug/Release options
 ##############################################################################################################################
 OPTFLAGS := -Os
-GLOBAL_DEFS += -DNDEBUG
+GLOBAL_DEFS += -DNDEBUG -DLOADER_TARGET=\"$(TARGET)\"
+
 ##############################################################################################################################
 # Warning options
 ##############################################################################################################################
@@ -47,48 +44,60 @@ CC_WARN := -Wall -Wextra -Wno-unused-variable -Wno-unused-function -Wno-unused-b
 ##############################################################################################################################
 # Code generation options
 ##############################################################################################################################
-CMN_CODEGEN := -ffunction-sections -fdata-sections -fsingle-precision-constant -ffast-math -fmerge-all-constants \
+CC_CODEGEN := -ffunction-sections -fdata-sections -fsingle-precision-constant -ffast-math -fmerge-all-constants \
 			   -fstrict-overflow -fno-math-errno -fvisibility=hidden -frename-registers -fpeel-loops -fsection-anchors -ffreestanding
-
-CC_CODEGEN  := $(CMN_CODEGEN)
 
 ##############################################################################################################################
 # Complete command lines
 ##############################################################################################################################
-CFLAGS      := -std=c11   $(CC_WARN)  $(CC_CODEGEN)  $(CPU_FLAGS) $(OPTFLAGS) $(INCLPATHS) $(GLOBAL_DEFS)
-LDFLAGS     := $(CPU_FLAGS) $(OPTFLAGS) $(GLOBAL_DEFS) -T$(LDSCRIPT) -Wl,--gc-sections,--warn-common,--nmagic \
+CFLAGS      := -std=c11   $(CC_WARN)  $(CC_CODEGEN)  $(CPU_FLAGS) $(OPTFLAGS) $(INCLPATHS) $(GLOBAL_DEFS) \
+			-fpic -mapcs-frame -fwhole-program -static
+			
+LDFLAGS     := $(CPU_FLAGS) $(OPTFLAGS) $(GLOBAL_DEFS) -T$(LDSCRIPT) -Wl,--gc-sections,--warn-common,--nmagic,-static \
 			--specs=nano.specs --specs=nosys.specs
-
-CFLAGS  += -fpic -msingle-pic-base -mpic-data-is-text-relative -mpic-register=r9 -fno-common -fomit-frame-pointer -fwhole-program -static
 
 ##############################################################################################################################
 # Build recipes
 ##############################################################################################################################
 .PHONY: all clean
 
-all: $(OUT_DIR)/$(APPLICATION).elf
+all: $(OUT_DIR)/$(TARGET).elf
 ifeq ($(VERBOSE_BUILD), 1)
 	@echo
 	@echo ------------------ Functions ------------------
-	@$(READELF) -s $(OUT_DIR)/$(APPLICATION).elf | grep FUNC | sort -k 3,3 -r -n | head -n 5 | awk '{printf " %-36.36s %-8.8s\n", $$8, $$3}'
+	@$(READELF) -s $(OUT_DIR)/$(TARGET).elf | grep FUNC | sort -k 3,3 -r -n | head -n 5 | awk '{printf " %-36.36s %-8.8s\n", $$8, $$3}'
 	@echo ------------------ Variables ------------------
-	@$(READELF) -s $(OUT_DIR)/$(APPLICATION).elf | grep OBJECT | sort -k 3,3 -r -n | head -n 5 | awk '{printf " %-36.36s %s\n", $$8, $$3}'
+	@$(READELF) -s $(OUT_DIR)/$(TARGET).elf | grep OBJECT | sort -k 3,3 -r -n | head -n 5 | awk '{printf " %-36.36s %s\n", $$8, $$3}'
 	@echo -----------------------------------------------
 endif
-	@$(SIZE) $(OUT_DIR)/$(APPLICATION).elf | tail -n 1 | awk '{printf "\nFlash: %8.8s\nRAM:   %8.8s\n\n", $$1+$$2, $$2+$$3}'
-	@$(OBJDUMP) -DlS $(OUT_DIR)/$(APPLICATION).elf > $(OUT_DIR)/$(APPLICATION).s
+	@$(SIZE) $(OUT_DIR)/$(TARGET).elf | tail -n 1 | awk '{printf "\nFlash: %8.8s\nRAM:   %8.8s\n\n", $$1+$$2, $$2+$$3}'
+	@$(OBJDUMP) -DlS $(OUT_DIR)/$(TARGET).elf > $(OUT_DIR)/$(TARGET).s
+	@mv $(OUT_DIR)/$(TARGET).elf ../../../../flm/cypress/traveo2/
+	
+	@echo "/* Auto-generated with a makefile */\n" > Traveo2_FlashLoaders.config;
+	@for DEFINE in $(GLOBAL_DEFS); do \
+		echo $$DEFINE | sed "s/-D/#define /;s/=/ /" >> Traveo2_FlashLoaders.config; \
+	done
+	@echo "/* Auto-generated with a makefile */\n" > Traveo2_FlashLoaders.includes
+	@for INCLUDE in $(INCLPATHS); do \
+		echo $$INCLUDE | sed "s/-I//g" >> Traveo2_FlashLoaders.includes; \
+	done
+	@cat $(DEPFILES) | grep -oP '^ (.*)' | sed 's/ /\n/g;s/\\//g' | sort -u > Traveo2_FlashLoaders.files
+	@find $(TARGET)/ -regex '.*\.\(mk\|ld\)' >> Traveo2_FlashLoaders.files
+	@echo "Makefile" >> Traveo2_FlashLoaders.files
+	@echo "README.md" >> Traveo2_FlashLoaders.files
+	@find -L  -type f -name "*.[od]" -delete
 
 clean:
 	@echo Cleaning up...
 	@find -L  -type f -name "*.[od]" -delete
-	@rm -f $(OUT_DIR)/$(APPLICATION).s $(OUT_DIR)/$(APPLICATION).elf
+	@rm -rf $(OUT_DIR)/*
 
-$(OUT_DIR)/$(APPLICATION).elf:$(OBJ)
-	@echo [$(TARGET): ld ] $(APPLICATION).elf
+$(OUT_DIR)/$(TARGET).elf:$(OBJ)
+	@echo [$(TARGET): ld ] $(TARGET).elf
 	@mkdir -p $(OUT_DIR)
-	@$(CC) $(LDFLAGS) $(OBJ) -o $(OUT_DIR)/$(APPLICATION).elf
-	@$(STRIP) --strip-debug $(OUT_DIR)/$(APPLICATION).elf
-	@find -L  -type f -name "*.[od]" -delete
+	@$(CC) $(LDFLAGS) $(OBJ) -o $(OUT_DIR)/$(TARGET).elf
+	@$(STRIP) --strip-debug $(OUT_DIR)/$(TARGET).elf
 
 %.o:%.c
 	@echo [$(TARGET): gcc] `basename $*.c`

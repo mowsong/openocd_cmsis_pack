@@ -362,7 +362,6 @@ static int default_flash_mem_blank_check(struct flash_bank *bank)
 		for (j = 0; j < bank->sectors[i].size; j += buffer_size) {
 			uint32_t chunk;
 			chunk = buffer_size;
-
 			if (chunk > (bank->sectors[i].size - j))
 				chunk = (bank->sectors[i].size - j);
 
@@ -799,17 +798,6 @@ int flash_write_unlock_verify(struct target *target, struct image *image,
 			continue;
 		}
 
-		/* Allow flash bank to have zero size
-		 * Usefull when bank is defined in config but not implemented
-		 * in some target variants */
-		if (c->size == 0) {
-			LOG_WARNING("flash bank at address " TARGET_ADDR_FMT
-						" not implemented in the target", run_address);
-			section++;	/* and skip it */
-			section_offset = 0;
-			continue;
-		}
-
 		/* collect consecutive sections which fall into the same bank */
 		section_last = section;
 		padding[section] = 0;
@@ -874,7 +862,7 @@ int flash_write_unlock_verify(struct target *target, struct image *image,
 				LOG_INFO("Section start address " TARGET_ADDR_FMT
 					" breaks the required alignment of flash bank %s",
 					run_address, c->name);
-				LOG_WARNING("Padding %" PRIu32 " bytes from " TARGET_ADDR_FMT,
+				LOG_INFO("Padding %" PRIu32 " bytes from " TARGET_ADDR_FMT,
 					padding_at_start, aligned_start);
 
 				run_address -= padding_at_start;

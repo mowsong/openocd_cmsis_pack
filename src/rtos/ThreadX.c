@@ -160,10 +160,10 @@ static const struct threadx_params threadx_params_list[] = {
 	40,							/* thread_name_offset; */
 	48,							/* thread_state_offset; */
 	136,						/* thread_next_offset */
-	&rtos_standard_cortex_r4_stacking,	/* stacking_info */
-	1,							/* stacking_info_nb */
-	NULL,						/* fn_get_stacking_info */
-	NULL,						/* fn_is_thread_id_valid */
+	rtos_threadx_arm926ejs_stacking,	/* stacking_info */
+	2,									/* stacking_info_nb */
+	get_stacking_info_arm926ejs,		/* fn_get_stacking_info */
+	is_thread_id_valid_arm926ejs,		/* fn_is_thread_id_valid */
 	},
 	{
 	"arm926ejs",				/* target_name */
@@ -459,7 +459,7 @@ static int threadx_get_thread_reg_list(struct rtos *rtos, int64_t thread_id,
 		return retval;
 	}
 
-	LOG_INFO("thread: 0x%" PRIx64 ", stack_ptr=0x%" PRIx64, (uint64_t)thread_id, (uint64_t)stack_ptr);
+	LOG_DEBUG("thread: 0x%" PRIx64 ", stack_ptr=0x%" PRIx64, (uint64_t)thread_id, (uint64_t)stack_ptr);
 
 	if (stack_ptr == 0) {
 		LOG_ERROR("null stack pointer in thread");

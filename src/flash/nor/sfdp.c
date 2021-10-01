@@ -76,7 +76,6 @@ int spi_sfdp(struct flash_bank *bank, struct flash_device *dev,
 	uint32_t *ptable = NULL;
 	unsigned int j, k, nph;
 	int retval, erase_type = 0;
-	const int addr_len = 3, dummy = 8;
 
 	memset(dev, 0, sizeof(struct flash_device));
 

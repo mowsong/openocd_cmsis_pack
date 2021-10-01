@@ -1342,7 +1342,7 @@ static int resolve_section_names(struct image_elf *elf, Elf32_Shdr *sect_hdrs,
 	int hr;
 
 	/* Locate section header representing string table with section names */
-	const size_t str_table_idx = field16(elf, elf->header->e_shstrndx);
+	const size_t str_table_idx = field16(elf, elf->header32->e_shstrndx);
 	Elf32_Shdr *str_table_hdr = &sect_hdrs[str_table_idx];
 
 	/* Load string table with section names */
@@ -1355,7 +1355,7 @@ static int resolve_section_names(struct image_elf *elf, Elf32_Shdr *sect_hdrs,
 		return hr;
 
 	/* Resolve section names as symbols */
-	const size_t section_header_num = field16(elf, elf->header->e_shnum);
+	const size_t section_header_num = field16(elf, elf->header32->e_shnum);
 	for (size_t i = 0; i < section_header_num; i++) {
 		struct symbol *crnt_symbol = symbols;
 		while (crnt_symbol->name) {
@@ -1389,8 +1389,8 @@ int image_resolve_symbols(struct image *image, struct symbol *symbols)
 	int hr;
 
 	/* Read all section headers */
-	sh_offs = field32(elf, elf->header->e_shoff);
-	sh_size = field16(elf, elf->header->e_shnum) * sizeof(Elf32_Shdr);
+	sh_offs = field32(elf, elf->header32->e_shoff);
+	sh_size = field16(elf, elf->header32->e_shnum) * sizeof(Elf32_Shdr);
 	Elf32_Shdr section_hdrs[sh_size];
 
 	hr = seek_read(elf->fileio, sh_offs, sh_size, section_hdrs);
@@ -1407,7 +1407,7 @@ int image_resolve_symbols(struct image *image, struct symbol *symbols)
 	Elf32_Sym *sym_table = NULL;
 
 	/* Loop through all section headers */
-	const size_t section_header_num = field16(elf, elf->header->e_shnum);
+	const size_t section_header_num = field16(elf, elf->header32->e_shnum);
 	for (size_t i = 0; i < section_header_num; i++) {
 
 		/* If current section header represents symbol table */

@@ -21,12 +21,12 @@
 
 #include "imp.h"
 #include "spi.h"
-#include "sfdp.h"
 #include <helper/time_support.h>
 #include <target/algorithm.h>
 #include <target/armv7m.h>
+#include <target/image.h>
 #include "cmspi.h"
-#include "flash/progress.h"
+#include "sfdp.h"
 
 #define I2C_ADDR_EEPROM_NORM 0xA0
 
@@ -135,27 +135,20 @@ static int log2u(uint32_t word)
 	return -1;
 }
 
-/* convert uint32_t into 4 uint8_t in target (i. e. little endian) byte order */
+/* convert uint32_t into 4 uint8_t in little endian byte order */
 static inline uint32_t h_to_le_32(uint32_t val)
 {
-	union {
-		uint32_t word;
-		uint8_t byte[sizeof(uint32_t)];
-	} res;
+	uint32_t result;
 
-	res.byte[0] = val & 0xFF;
-	res.byte[1] = (val>>8) & 0xFF;
-	res.byte[2] = (val>>16) & 0xFF;
-	res.byte[3] = (val>>24) & 0xFF;
-
-	return res.word;
+	h_u32_to_le((uint8_t *) &result, val);
+	return result;
 }
 
 /* timeout in ms */
-#define MSOFTSPI_CMD_TIMEOUT		(100)
-#define MSOFTSPI_PROBE_TIMEOUT		(100)
-#define MSOFTSPI_MAX_TIMEOUT		(2000)
-#define MSOFTSPI_MASS_ERASE_TIMEOUT	(400000)
+#define CMSPI_CMD_TIMEOUT			(100)
+#define CMSPI_PROBE_TIMEOUT			(100)
+#define CMSPI_MAX_TIMEOUT			(2000)
+#define CMSPI_MASS_ERASE_TIMEOUT	(400000)
 
 #define DATA_PINS					4
 
@@ -176,6 +169,7 @@ struct cmspi_flash_bank {
 	uint32_t bank_num;
 	char devname[32];
 	struct flash_device dev;
+	int sfdp_dummy;				/* number of dummy *bytes* for SFDP read */
 	serial_mode_t mode;			/* current operating mode */
 	uint8_t dummy;				/* number of dummy clocks, only in QPI read */
 	uint8_t inp_off;			/* word offset port output reg. to port input reg. */
@@ -199,38 +193,59 @@ struct sector_info {
 };
 
 /* in SPI and DPI mode IO3/NHOLD and IO2/NWP must be kept high */
-static int deactivate_io3_io2(struct flash_bank *bank)
+static int deactivate_nhold_nwp(struct flash_bank *bank)
 {
 	struct target *target = bank->target;
 	struct cmspi_flash_bank *cmspi_info = bank->driver_priv;
-	uint32_t port;
-	int retval = ERROR_OK;
+	uint32_t port_iox, dir_inp_off, dir_out_off;
+	int k, retval = ERROR_OK;
 
-	if (cmspi_info->io[3].addr != 0) {
-		retval = target_read_u32(target, cmspi_info->io[3].addr, &port);
-		if (retval != ERROR_OK)
-			return retval;
-		port |= (1UL << ((cmspi_info->bit_no >> (3 << 3)) & 0xFF));
-		retval = target_write_u32(target, cmspi_info->io[3].addr, port);
-		if (retval != ERROR_OK)
-			return retval;
-	}
+	LOG_DEBUG("deactivating NHOLD and NWP");
 
-	if (cmspi_info->io[2].addr != 0) {
-		retval = target_read_u32(target, cmspi_info->io[2].addr, &port);
-		if (retval != ERROR_OK)
-			return retval;
-		port |= (1UL << ((cmspi_info->bit_no >> (2 << 3)) & 0xFF));
-		retval = target_write_u32(target, cmspi_info->io[2].addr, port);
-		if (retval != ERROR_OK)
-			return retval;
+	for (k = 3; k >= 2 ; --k) {
+		if (cmspi_info->io[k].addr != 0) {
+			/* set port value to high  */
+			retval = target_read_u32(target, cmspi_info->io[k].addr, &port_iox);
+			if (retval != ERROR_OK) {
+				LOG_ERROR("reading io[%d] port data failed", k);
+				return retval;
+			}
+			if (!(port_iox & cmspi_info->io[k].mask)) {
+				port_iox |= cmspi_info->io[k].mask;
+				retval = target_write_u32(target, cmspi_info->io[k].addr, port_iox);
+				if (retval != ERROR_OK) {
+					LOG_ERROR("writing io[%d] port data failed", k);
+					return retval;
+				}
+			}
+
+			dir_inp_off = DIR_INP_OFF(k);
+			if (dir_inp_off) {
+				dir_out_off = DIR_OUT_OFF(k);
+				if (dir_inp_off == dir_out_off) {
+					/* if dir_inp_off equals dir_out_off, use read-modify-write
+					 * for direction register */
+					retval = target_write_u32(target, cmspi_info->io[k].addr + dir_inp_off,
+						cmspi_info->io_def[k] ^ cmspi_info->io[k].mask);
+				} else {
+					/* else use set/clear registers */
+					retval = target_write_u32(target, cmspi_info->io[k].addr + dir_out_off,
+						cmspi_info->io[k].mask);
+				}
+				if (retval != ERROR_OK) {
+					LOG_ERROR("setting io[%d] direction failed", k);
+					return retval;
+				}
+			}
+		}
 	}
 
 	return retval;
 }
 
 /* set data pin direction to output or default (i. e. input) mode */
-/* in QPI-mode all data pins are affected, in non-QPI-mode only IO0/MOSI */
+/* in QPI-mode all data pins are affected, in DPI-mode only IO1/MISO
+ * and IO0/MOSI, in SPI mode only IO0/MOSI */
 static int set_to_output(struct flash_bank *bank, bool out)
 {
 	struct target *target = bank->target;
@@ -285,6 +300,9 @@ static int set_to_output(struct flash_bank *bank, bool out)
 
 FLASH_BANK_COMMAND_HANDLER(cmspi_flash_bank_command)
 {
+	/* BHDT: CMSPI bank is not memory mapped */
+	bank->is_memory_mapped = false;
+
 	struct cmspi_flash_bank *cmspi_info;
 	uint16_t temp;
 	uint8_t byte, byte_inp, byte_out;
@@ -457,7 +475,6 @@ FLASH_BANK_COMMAND_HANDLER(cmspi_flash_bank_command)
 					cmspi_info->io[k].addr + DIR_OUT_OFF(k),
 					cmspi_info->io[k].mask);
 		} while (k-- > 0);
-
 	}
 
 	LOG_DEBUG("bit_no:      0x%08" PRIx32, cmspi_info->bit_no);
@@ -662,7 +679,7 @@ static int cmspi_shift_out(struct flash_bank *bank, uint32_t word)
 	uint32_t port_clk, pdir_clk, port_iox, pdir_iox, in_iox, bit_mask;
 	int k, m, retval;
 
-	LOG_DEBUG("0x%02" PRIx32, word);
+	LOG_DEBUG("0x%02" PRIx8, word);
 
 	retval = target_read_u32(target, cmspi_info->clk.addr, &port_clk);
 	if (retval != ERROR_OK)
@@ -1086,7 +1103,7 @@ static int cmspi_shift_in(struct flash_bank *bank, uint32_t *word)
 			return ERROR_FAIL;
 	}
 
-	LOG_DEBUG("0x%02" PRIx32, *word);
+	LOG_DEBUG("0x%02" PRIx8, *word);
 
 	return ERROR_OK;
 }
@@ -1216,7 +1233,7 @@ err:
 
 	/* check write enabled */
 	if ((status & SPIFLASH_WE_BIT) == 0) {
-		LOG_ERROR("Cannot enable write to flash. Status=0x%02" PRIx32, status);
+		LOG_ERROR("Cannot enable write to flash. Status=0x%02" PRIx8, status);
 		return ERROR_FAIL;
 	}
 
@@ -1306,8 +1323,9 @@ err:
 		return retval;
 
 	/* check for command in progress for flash */
-	if ((data & SPIFLASH_WE_BIT) == 0) {
-		LOG_DEBUG("Sector erase not accepted by flash or already completed. Status=0x%02" PRIx8, (uint8_t)data);
+	if (((data & SPIFLASH_BSY_BIT) == 0) && (data & SPIFLASH_WE_BIT) != 0) {
+		LOG_DEBUG("Sector erase not accepted by flash. Status=0x%02" PRIx8,
+			data & 0xFF);
 		/* return ERROR_FAIL; */
 	}
 
@@ -1315,18 +1333,18 @@ err:
 	LOG_DEBUG("erasing sector %4d", sector);
 
 	/* poll WIP for end of self timed Sector Erase cycle */
-	retval = wait_till_ready(bank, MSOFTSPI_MAX_TIMEOUT);
+	retval = wait_till_ready(bank, CMSPI_MAX_TIMEOUT);
 
 	return retval;
 }
 
 /* Erase range of sectors */
-static int cmspi_erase(struct flash_bank *bank, unsigned int first, unsigned int last)
+static int cmspi_erase(struct flash_bank *bank, unsigned int first,
+					   unsigned int last)
 {
 	struct target *target = bank->target;
 	struct cmspi_flash_bank *cmspi_info = bank->driver_priv;
 	int retval = ERROR_OK;
-	unsigned int sector;
 
 	LOG_DEBUG("%s: from sector %d to sector %d", __func__, first, last);
 
@@ -1350,6 +1368,7 @@ static int cmspi_erase(struct flash_bank *bank, unsigned int first, unsigned int
 		return ERROR_FLASH_SECTOR_INVALID;
 	}
 
+	unsigned int sector;
 	for (sector = first; sector <= last; sector++) {
 		if (bank->sectors[sector].is_protected) {
 			LOG_ERROR("Flash sector %d protected", sector);
@@ -1357,15 +1376,12 @@ static int cmspi_erase(struct flash_bank *bank, unsigned int first, unsigned int
 		}
 	}
 
-	progress_init(last - first + 1, ERASING);
 	for (sector = first; sector <= last; sector++) {
 		retval = cmspi_erase_sector(bank, sector);
 		if (retval != ERROR_OK)
 			break;
-		progress_sofar(sector - first + 1);
 		keep_alive();
 	}
-	progress_done(retval);
 
 	if (retval != ERROR_OK)
 		LOG_ERROR("Flash sector_erase failed on sector %d", sector);
@@ -1394,15 +1410,15 @@ int cmspi_i2c_calib(struct flash_bank *bank, uint32_t count, double *time)
 	static const uint8_t cmi2c_calib_code[] = {
 		#include "../../../contrib/loaders/flash/cmspi/cmi2c_calib.inc"
 	};
-	const uint32_t code_size = sizeof(cmi2c_calib_code);
+	const uint32_t codesize = sizeof(cmi2c_calib_code);
 
 	maxsize = target_get_working_area_avail(target);
-	if (maxsize < code_size) {
+	if (maxsize < codesize) {
 		LOG_WARNING("Not enough working area, can't do I2C calibration");
 		return ERROR_TARGET_RESOURCE_NOT_AVAILABLE;
 	}
 
-	if (target_alloc_working_area_try(target, code_size,
+	if (target_alloc_working_area_try(target, codesize,
 			&calib_algorithm) != ERROR_OK) {
 		LOG_ERROR("allocating working area failed");
 		return ERROR_TARGET_RESOURCE_NOT_AVAILABLE;
@@ -1413,13 +1429,13 @@ int cmspi_i2c_calib(struct flash_bank *bank, uint32_t count, double *time)
 
 	/* prepare check code, excluding port_buffer */
 	retval = target_write_buffer(target, calib_algorithm->address,
-		code_size - sizeof(port_buffer), cmi2c_calib_code);
+		codesize - sizeof(port_buffer), cmi2c_calib_code);
 	if (retval != ERROR_OK)
 		goto err;
 
 	/* prepare port_buffer values */
 	retval = target_write_buffer(target, calib_algorithm->address
-		+ code_size - sizeof(port_buffer),
+		+ codesize - sizeof(port_buffer),
 		sizeof(port_buffer), (uint8_t *) port_buffer);
 	if (retval != ERROR_OK)
 		goto err;
@@ -1431,14 +1447,14 @@ int cmspi_i2c_calib(struct flash_bank *bank, uint32_t count, double *time)
 	armv7m_info.core_mode = ARM_MODE_THREAD;
 
 	/* after breakpoint instruction (halfword) one nop (halfword) till end of code */
-	exit_point = calib_algorithm->address + code_size
+	exit_point = calib_algorithm->address + codesize
 		- sizeof(uint32_t) - sizeof(port_buffer);
 
 	duration_start(&bench);
 
 	retval = target_run_algorithm(target,
 		0, NULL,
-		1, reg_params,
+		ARRAY_SIZE(reg_params), reg_params,
 		calib_algorithm->address, exit_point,
 		10000,
 		&armv7m_info);
@@ -1479,15 +1495,15 @@ int cmspi_i2c_scan(struct flash_bank *bank)
 	static const uint8_t cmi2c_scan_code[] = {
 		#include "../../../contrib/loaders/flash/cmspi/cmi2c_scan.inc"
 	};
-	const uint32_t code_size = sizeof(cmi2c_scan_code);
+	const uint32_t codesize = sizeof(cmi2c_scan_code);
 
 	maxsize = target_get_working_area_avail(target);
-	if (maxsize < code_size + SCAN_SIZE) {
+	if (maxsize < codesize + SCAN_SIZE) {
 		LOG_WARNING("Not enough working area, can't do I2C scan");
 		return ERROR_TARGET_RESOURCE_NOT_AVAILABLE;
 	}
 
-	if (target_alloc_working_area_try(target, code_size
+	if (target_alloc_working_area_try(target, codesize
 		+ SCAN_SIZE * sizeof(scan_info[0]), &scan_algorithm) != ERROR_OK) {
 		LOG_ERROR("allocating working area failed");
 		return ERROR_TARGET_RESOURCE_NOT_AVAILABLE;
@@ -1498,13 +1514,13 @@ int cmspi_i2c_scan(struct flash_bank *bank)
 
 	/* prepare check code, excluding port_buffer */
 	retval = target_write_buffer(target, scan_algorithm->address,
-		code_size - sizeof(port_buffer), cmi2c_scan_code);
+		codesize - sizeof(port_buffer), cmi2c_scan_code);
 	if (retval != ERROR_OK)
 		goto err;
 
 	/* prepare port_buffer values */
 	retval = target_write_buffer(target, scan_algorithm->address
-		+ code_size - sizeof(port_buffer),
+		+ codesize - sizeof(port_buffer),
 		sizeof(port_buffer), (uint8_t *) port_buffer);
 	if (retval != ERROR_OK)
 		goto err;
@@ -1514,7 +1530,7 @@ int cmspi_i2c_scan(struct flash_bank *bank)
 
 	/* after breakpoint instruction (halfword) one nop (halfword) and
 	 * port_buffer till end of code */
-	exit_point = scan_algorithm->address + code_size
+	exit_point = scan_algorithm->address + codesize
 		- sizeof(uint32_t) - sizeof(port_buffer);
 
 	retval = target_run_algorithm(target,
@@ -1528,7 +1544,7 @@ int cmspi_i2c_scan(struct flash_bank *bank)
 
 	keep_alive();
 
-	retval = target_read_buffer(target, scan_algorithm->address + code_size,
+	retval = target_read_buffer(target, scan_algorithm->address + codesize,
 			SCAN_SIZE * sizeof(scan_info[0]), (uint8_t *) &scan_info);
 	if (retval != ERROR_OK)
 		goto err;
@@ -1539,7 +1555,7 @@ int cmspi_i2c_scan(struct flash_bank *bank)
 	for (addr = I2C_FIRST; addr <= I2C_LAST; addr++) {
 		if (!(scan_info[(addr - I2C_FIRST) >> 5] &
 			(1UL << (31 - ((addr - I2C_FIRST) & ((1UL << 5) - 1)))))) {
-			snprintf(temp, sizeof(temp), "%02" PRIx16 " ", addr);
+			snprintf(temp, sizeof(temp), "%02" PRIx8 " ", addr);
 			strncat(output, temp, sizeof(output) - strlen(output) - 1);
 			if (++count >= max) {
 				LOG_INFO("i2c_scan: %s", output);
@@ -1565,12 +1581,11 @@ static int cmspi_blank_check(struct flash_bank *bank)
 	struct duration bench;
 	struct reg_param reg_params[3];
 	struct armv7m_algorithm armv7m_info;
-	struct working_area *erase_check_algorithm;
+	struct working_area *algorithm;
 	static const uint8_t *code;
 	struct sector_info erase_check_info;
-	uint32_t code_size, maxsize, exit_point, result, port;
+	uint32_t codesize, maxsize, exit_point, result, port;
 	uint8_t cmd;
-	unsigned int num_sectors, sector, count, index;
 	int retval;
 	const uint32_t erased = 0x00FF;
 
@@ -1584,19 +1599,19 @@ static int cmspi_blank_check(struct flash_bank *bank)
 		return ERROR_FLASH_BANK_NOT_PROBED;
 	}
 
-	/* see contrib/loaders/erase_check/cmspi_erase_check.S for src */
+	/* see contrib/loaders/flash/cmspi/cmspi_erase_check.S for src */
 	static const uint8_t cmspi_erase_check_code[] = {
 		#include "../../../contrib/loaders/flash/cmspi/cmspi_erase_check.inc"
 	};
 
-	/* see contrib/loaders/erase_check/cmqpi_erase_check.S for src */
-	static const uint8_t cmqpi_erase_check_code[] = {
-		#include "../../../contrib/loaders/flash/cmspi/cmqpi_erase_check.inc"
-	};
-
-	/* see contrib/loaders/erase_check/cmdpi_erase_check.S for src */
+	/* see contrib/loaders/flash/cmspi/cmdpi_erase_check.S for src */
 	static const uint8_t cmdpi_erase_check_code[] = {
 		#include "../../../contrib/loaders/flash/cmspi/cmdpi_erase_check.inc"
+	};
+
+	/* see contrib/loaders/flash/cmspi/cmqpi_erase_check.S for src */
+	static const uint8_t cmqpi_erase_check_code[] = {
+		#include "../../../contrib/loaders/flash/cmspi/cmqpi_erase_check.inc"
 	};
 
 	/* see contrib/loaders/erase_check/cmi2c_erase_check.S for src */
@@ -1607,25 +1622,25 @@ static int cmspi_blank_check(struct flash_bank *bank)
 	switch (cmspi_info->mode) {
 		case MODE_SPI:
 			code = cmspi_erase_check_code;
-			code_size = sizeof(cmspi_erase_check_code);
+			codesize = sizeof(cmspi_erase_check_code);
 			cmd = cmspi_info->dev.read_cmd;
 			break;
 
 		case MODE_DPI:
 			code = cmdpi_erase_check_code;
-			code_size = sizeof(cmdpi_erase_check_code);
+			codesize = sizeof(cmdpi_erase_check_code);
 			cmd = cmspi_info->dev.qread_cmd;
 			break;
 
 		case MODE_QPI:
 			code = cmqpi_erase_check_code;
-			code_size = sizeof(cmqpi_erase_check_code);
+			codesize = sizeof(cmqpi_erase_check_code);
 			cmd = cmspi_info->dev.qread_cmd;
 			break;
 
 		case MODE_I2C:
 			code = cmi2c_erase_check_code;
-			code_size = sizeof(cmi2c_erase_check_code);
+			codesize = sizeof(cmi2c_erase_check_code);
 			cmd = cmspi_info->i2c_addr;
 			break;
 
@@ -1637,30 +1652,29 @@ static int cmspi_blank_check(struct flash_bank *bank)
 	uint32_t port_buffer[] = FILL_PORT_BUFFER(cmd);
 
 	maxsize = target_get_working_area_avail(target);
-	if (maxsize < code_size + 2 * sizeof(erase_check_info)) {
+	if (maxsize < codesize + sizeof(erase_check_info)) {
 		LOG_WARNING("Not enough working area, can't do SPI blank check");
 		return ERROR_TARGET_RESOURCE_NOT_AVAILABLE;
 	}
 
-	num_sectors = (maxsize - code_size) / sizeof(erase_check_info);
+	unsigned int num_sectors = (maxsize - codesize) / sizeof(erase_check_info);
 	num_sectors = (bank->num_sectors < num_sectors) ? bank->num_sectors : num_sectors;
 
 	if (target_alloc_working_area_try(target,
-			code_size + num_sectors * sizeof(erase_check_info),
-			&erase_check_algorithm) != ERROR_OK) {
+			codesize + num_sectors * sizeof(erase_check_info), &algorithm) != ERROR_OK) {
 		LOG_ERROR("allocating working area failed");
 		return ERROR_TARGET_RESOURCE_NOT_AVAILABLE;
 	};
 
 	/* prepare check code, excluding port_buffer */
-	retval = target_write_buffer(target, erase_check_algorithm->address,
-		code_size - sizeof(port_buffer), code);
+	retval = target_write_buffer(target, algorithm->address,
+		codesize - sizeof(port_buffer), code);
 	if (retval != ERROR_OK)
 		goto err;
 
 	/* prepare port_buffer values */
-	retval = target_write_buffer(target, erase_check_algorithm->address
-		+ code_size - sizeof(port_buffer), sizeof(port_buffer), (uint8_t *) port_buffer);
+	retval = target_write_buffer(target, algorithm->address + codesize - sizeof(port_buffer),
+		sizeof(port_buffer), (uint8_t *) port_buffer);
 	if (retval != ERROR_OK)
 		goto err;
 
@@ -1668,27 +1682,26 @@ static int cmspi_blank_check(struct flash_bank *bank)
 
 	/* after breakpoint instruction (halfword) one nop (halfword) and
 	 * port_buffer till end of code */
-	exit_point = erase_check_algorithm->address + code_size
-		- sizeof(uint32_t) - sizeof(port_buffer);
+	exit_point = algorithm->address + codesize - sizeof(uint32_t) - sizeof(port_buffer);
 
 	init_reg_param(&reg_params[0], "r0", 32, PARAM_OUT);	/* sector count */
 	init_reg_param(&reg_params[1], "r1", 32, PARAM_OUT);	/* flash pagesize */
 	init_reg_param(&reg_params[2], "r3", 32, PARAM_OUT);	/* 1/2/3/4-byte address mode */
 
-	sector = 0;
+	unsigned int sector = 0;
 	while (sector < bank->num_sectors) {
 		/* at most num_sectors sectors to handle in one run */
-		count = bank->num_sectors - sector;
+		unsigned int count = bank->num_sectors - sector;
 		if (count > num_sectors)
 			count = num_sectors;
 
-		for (index = 0; index < count; index++) {
+		for (unsigned int index = 0; index < count; index++) {
 			erase_check_info.offset = h_to_le_32(bank->sectors[sector + index].offset);
 			erase_check_info.size = h_to_le_32(bank->sectors[sector + index].size);
 			erase_check_info.result = h_to_le_32(erased);
 
-			retval = target_write_buffer(target, erase_check_algorithm->address
-				+ code_size + index * sizeof(erase_check_info),
+			retval = target_write_buffer(target, algorithm->address
+				+ codesize + index * sizeof(erase_check_info),
 					sizeof(erase_check_info), (uint8_t *) &erase_check_info);
 			if (retval != ERROR_OK)
 				goto err;
@@ -1706,17 +1719,17 @@ static int cmspi_blank_check(struct flash_bank *bank)
 		/* check a block of sectors */
 		retval = target_run_algorithm(target,
 			0, NULL,
-			3, reg_params,
-			erase_check_algorithm->address, exit_point,
+			ARRAY_SIZE(reg_params), reg_params,
+			algorithm->address, exit_point,
 			4 * count * (bank->sectors[sector].size >>
 				((cmspi_info->mode == MODE_I2C) ? 0 : 6)),
 			&armv7m_info);
 		if (retval != ERROR_OK)
 			break;
 
-		for (index = 0; index < count; index++) {
-			retval = target_read_buffer(target, erase_check_algorithm->address
-				+ code_size + index * sizeof(erase_check_info),
+		for (unsigned int index = 0; index < count; index++) {
+			retval = target_read_buffer(target, algorithm->address
+				+ codesize + index * sizeof(erase_check_info),
 					sizeof(erase_check_info), (uint8_t *) &erase_check_info);
 			if (retval != ERROR_OK)
 				goto err;
@@ -1741,9 +1754,8 @@ static int cmspi_blank_check(struct flash_bank *bank)
 	destroy_reg_param(&reg_params[2]);
 
 	duration_measure(&bench);
-	LOG_INFO("cmspi blank checked in"
-			" %fs (%0.3f KiB/s)", duration_elapsed(&bench),
-			duration_kbps(&bench, bank->size));
+	LOG_INFO("cmspi blank checked in %fs (%0.3f KiB/s)",
+		duration_elapsed(&bench), duration_kbps(&bench, bank->size));
 
 err:
 	if (cmspi_info->mode == MODE_I2C) {
@@ -1754,21 +1766,186 @@ err:
 		set_to_output(bank, false);
 
 		/* set NCS, ignoring errors */
-		(void) target_read_u32(target, cmspi_info->ncs.addr, &port);
-		SET_PORT_BIT(port, ncs);
+		target_read_u32(target, cmspi_info->ncs.addr, &port);
+		port |= (cmspi_info->ncs.mask);
+		target_write_u32(target, cmspi_info->ncs.addr, port);
 	}
 
-	target_free_working_area(target, erase_check_algorithm);
+	target_free_working_area(target, algorithm);
 
 	return retval;
 }
 
-static int cmspi_protect(struct flash_bank *bank, int set,
-	unsigned int first, unsigned int last)
+/* Verify checksum */
+static int cmspi_verify(struct flash_bank *bank, const uint8_t *buffer,
+	uint32_t offset, uint32_t count)
 {
-	unsigned int sector;
+	struct target *target = bank->target;
+	struct cmspi_flash_bank *cmspi_info = bank->driver_priv;
+	struct reg_param reg_params[4];
+	struct armv7m_algorithm armv7m_info;
+	struct working_area *algorithm;
+	const uint8_t *code;
+	uint8_t cmd;
+	uint32_t codesize, crc32, port, result, exit_point;
+	int retval;
 
-	for (sector = first; sector <= last; sector++)
+	if (target->state != TARGET_HALTED) {
+		LOG_ERROR("Target not halted");
+		return ERROR_TARGET_NOT_HALTED;
+	}
+
+	if (!(cmspi_info->probed)) {
+		LOG_ERROR("Flash bank not probed");
+		return ERROR_FLASH_BANK_NOT_PROBED;
+	}
+
+	if (offset + count > cmspi_info->dev.size_in_bytes) {
+		LOG_WARNING("Verify beyond end of flash. Extra data to be ignored.");
+		count = cmspi_info->dev.size_in_bytes - offset;
+	}
+
+	/* see contrib/loaders/flash/cmspi/cmspi_verify.S for src */
+	static const uint8_t cmspi_verify_code[] = {
+		#include "../../../contrib/loaders/flash/cmspi/cmspi_verify.inc"
+	};
+
+	/* see contrib/loaders/flash/cmspi/cmdpi_verify.S for src */
+	static const uint8_t cmdpi_verify_code[] = {
+		#include "../../../contrib/loaders/flash/cmspi/cmdpi_verify.inc"
+	};
+
+	/* see contrib/loaders/flash/cmspi/cmqpi_verify.S for src */
+	static const uint8_t cmqpi_verify_code[] = {
+		#include "../../../contrib/loaders/flash/cmspi/cmqpi_verify.inc"
+	};
+
+	/* see contrib/loaders/erase_check/cmi2c_verify.S for src */
+	static const uint8_t cmi2c_verify_code[] = {
+		#include "../../../contrib/loaders/flash/cmspi/cmi2c_verify.inc"
+	};
+
+	switch (cmspi_info->mode) {
+		case MODE_SPI:
+			code = cmspi_verify_code;
+			codesize = sizeof(cmspi_verify_code);
+			cmd = cmspi_info->dev.read_cmd;
+			break;
+
+		case MODE_DPI:
+			code = cmdpi_verify_code;
+			codesize = sizeof(cmdpi_verify_code);
+			cmd = cmspi_info->dev.qread_cmd;
+			break;
+
+		case MODE_QPI:
+			code = cmqpi_verify_code;
+			codesize = sizeof(cmqpi_verify_code);
+			cmd = cmspi_info->dev.qread_cmd;
+			break;
+
+		case MODE_I2C:
+			code = cmi2c_verify_code;
+			codesize = sizeof(cmi2c_verify_code);
+			cmd = cmspi_info->i2c_addr;
+			break;
+
+		default:
+			return ERROR_FAIL;
+	}
+
+	/* this will overlay the last words of cm*_verify_code in target */
+	uint32_t port_buffer[] = FILL_PORT_BUFFER(cmd);
+
+	if (target_alloc_working_area_try(target, codesize, &algorithm) != ERROR_OK) {
+		LOG_ERROR("allocating working area failed");
+		return ERROR_TARGET_RESOURCE_NOT_AVAILABLE;
+	};
+
+	/* prepare verify code, excluding port_buffer */
+	retval = target_write_buffer(target, algorithm->address,
+		codesize - sizeof(port_buffer), code);
+	if (retval != ERROR_OK)
+		goto err;
+
+	/* prepare port_buffer values */
+	retval = target_write_buffer(target, algorithm->address + codesize - sizeof(port_buffer),
+		sizeof(port_buffer), (uint8_t *) port_buffer);
+	if (retval != ERROR_OK)
+		goto err;
+
+	/* after breakpoint instruction (halfword) one nop (halfword) and
+	 * port_buffer till end of code */
+	exit_point = algorithm->address + codesize - sizeof(uint32_t) - sizeof(port_buffer);
+
+	init_reg_param(&reg_params[0], "r0", 32, PARAM_IN_OUT); /* count (in), crc32 (out) */
+	init_reg_param(&reg_params[1], "r1", 32, PARAM_OUT);	/* flash sectorsize */
+	init_reg_param(&reg_params[2], "r2", 32, PARAM_IN_OUT);	/* offset into flash address */
+	init_reg_param(&reg_params[3], "r3", 32, PARAM_OUT);	/* 1/2/3/4-byte address mode */
+
+	buf_set_u32(reg_params[0].value, 0, 32, count);
+	buf_set_u32(reg_params[1].value, 0, 32, cmspi_info->dev.sectorsize);
+	buf_set_u32(reg_params[2].value, 0, 32, offset);
+	buf_set_u32(reg_params[3].value, 0, 32,
+		(cmspi_info->mode == MODE_I2C) ? I2C_ADDR_BYTES : SPI_ADDR_BYTES);
+
+	armv7m_info.common_magic = ARMV7M_COMMON_MAGIC;
+	armv7m_info.core_mode = ARM_MODE_THREAD;
+
+	retval = target_run_algorithm(target,
+		0, NULL,
+		ARRAY_SIZE(reg_params), reg_params,
+		algorithm->address, exit_point,
+		4 * count * ((cmspi_info->mode == MODE_I2C) ? 4 : 1),
+		&armv7m_info);
+	if (retval != ERROR_OK)
+		goto err;
+
+	result = buf_get_u32(reg_params[2].value, 0, 32);
+	if (result != (offset + count)) {
+		LOG_ERROR("Verify algorithm failed to compute checksum");
+		retval = ERROR_FAIL;
+		goto err;
+	}
+
+	image_calculate_checksum(buffer, count, &crc32);
+
+	if (retval == ERROR_OK) {
+		result = buf_get_u32(reg_params[0].value, 0, 32);
+		LOG_DEBUG("addr " TARGET_ADDR_FMT ", len 0x%08" PRIx32 ", crc 0x%08" PRIx32 " 0x%08" PRIx32,
+			offset + bank->base, count, ~crc32, result);
+		if (~crc32 != result)
+			retval = ERROR_FAIL;
+	}
+
+	destroy_reg_param(&reg_params[0]);
+	destroy_reg_param(&reg_params[1]);
+	destroy_reg_param(&reg_params[2]);
+	destroy_reg_param(&reg_params[3]);
+
+err:
+	if (cmspi_info->mode == MODE_I2C) {
+		/* error recovery */
+		cmspi_i2c_resync(bank);
+	} else {
+		/* set to input */
+		set_to_output(bank, false);
+
+		/* set NCS, ignoring errors */
+		target_read_u32(target, cmspi_info->ncs.addr, &port);
+		port |= (cmspi_info->ncs.mask);
+		target_write_u32(target, cmspi_info->ncs.addr, port);
+	}
+
+	target_free_working_area(target, algorithm);
+
+	return retval;
+}
+
+static int cmspi_protect(struct flash_bank *bank, int set, unsigned int first,
+						 unsigned int last)
+{
+	for (unsigned int sector = first; sector <= last; sector++)
 		bank->sectors[sector].is_protected = set;
 	return ERROR_OK;
 }
@@ -1781,9 +1958,9 @@ static int cmspi_read_write_block(struct flash_bank *bank, uint8_t *buffer,
 	struct cmspi_flash_bank *cmspi_info = bank->driver_priv;
 	struct reg_param reg_params[6];
 	struct armv7m_algorithm armv7m_info;
-	struct working_area *write_algorithm;
+	struct working_area *algorithm;
 	static const uint8_t *code;
-	uint32_t pagesize, fifo_start, fifosize, code_size, maxsize;
+	uint32_t pagesize, fifo_start, fifosize, codesize, maxsize;
 	uint32_t exit_point, remaining, port;
 	uint8_t cmd;
 	int retval = ERROR_OK;
@@ -1834,25 +2011,25 @@ static int cmspi_read_write_block(struct flash_bank *bank, uint8_t *buffer,
 	switch (cmspi_info->mode) {
 		case MODE_SPI:
 			code = write ? cmspi_write_code : cmspi_read_code;
-			code_size = write ? sizeof(cmspi_write_code) : sizeof(cmspi_read_code);
+			codesize = write ? sizeof(cmspi_write_code) : sizeof(cmspi_read_code);
 			cmd = write ? cmspi_info->dev.pprog_cmd : cmspi_info->dev.read_cmd;
 			break;
 
 		case MODE_DPI:
 			code = write ? cmdpi_write_code : cmdpi_read_code;
-			code_size = write ? sizeof(cmdpi_write_code) : sizeof(cmdpi_read_code);
+			codesize = write ? sizeof(cmdpi_write_code) : sizeof(cmdpi_read_code);
 			cmd = write ? cmspi_info->dev.pprog_cmd : cmspi_info->dev.qread_cmd;
 			break;
 
 		case MODE_QPI:
 			code = write ? cmqpi_write_code : cmqpi_read_code;
-			code_size = write ? sizeof(cmqpi_write_code) : sizeof(cmqpi_read_code);
+			codesize = write ? sizeof(cmqpi_write_code) : sizeof(cmqpi_read_code);
 			cmd = write ? cmspi_info->dev.pprog_cmd : cmspi_info->dev.qread_cmd;
 			break;
 
 		case MODE_I2C:
 			code = write ? cmi2c_write_code : cmi2c_read_code;
-			code_size = write ? sizeof(cmi2c_write_code) : sizeof(cmi2c_read_code);
+			codesize = write ? sizeof(cmi2c_write_code) : sizeof(cmi2c_read_code);
 			cmd = cmspi_info->i2c_addr;
 			break;
 
@@ -1872,39 +2049,39 @@ static int cmspi_read_write_block(struct flash_bank *bank, uint8_t *buffer,
 
 	/* memory buffer, we assume sectorsize to be a power of 2 times pagesize */
 	maxsize = target_get_working_area_avail(target);
-	if (maxsize < code_size + 2 * sizeof(uint32_t) + pagesize) {
+	if (maxsize < codesize + 2 * sizeof(uint32_t) + pagesize) {
 		LOG_WARNING("Not enough working area, can't do SPI %s",
 			write ? "page writes" : "reads");
 		return ERROR_TARGET_RESOURCE_NOT_AVAILABLE;
 	}
 
 	/* fifo size at most sector size, and multiple of page size */
-	maxsize -= (code_size + 2 * sizeof(uint32_t));
+	maxsize -= (codesize + 2 * sizeof(uint32_t));
 	fifosize = ((maxsize < fifosize) ? maxsize : fifosize) & ~(pagesize - 1);
 	LOG_DEBUG("fifo_size 0x%08" PRIx32, fifosize);
 
 	if (target_alloc_working_area_try(target,
-		code_size + 2 * sizeof(uint32_t) + fifosize, &write_algorithm) != ERROR_OK) {
+		codesize + 2 * sizeof(uint32_t) + fifosize, &algorithm) != ERROR_OK) {
 		LOG_ERROR("allocating working area failed");
 		return ERROR_TARGET_RESOURCE_NOT_AVAILABLE;
 	};
 
 	/* prepare read/write code, excluding port_buffer */
-	retval = target_write_buffer(target, write_algorithm->address,
-		code_size - sizeof(port_buffer), code);
+	retval = target_write_buffer(target, algorithm->address,
+		codesize - sizeof(port_buffer), code);
 	if (retval != ERROR_OK)
 		goto err;
 
 	/* prepare port_buffer values */
-	retval = target_write_buffer(target, write_algorithm->address
-		+ code_size - sizeof(port_buffer),
+	retval = target_write_buffer(target, algorithm->address
+		+ codesize - sizeof(port_buffer),
 		sizeof(port_buffer), (uint8_t *) port_buffer);
 	if (retval != ERROR_OK)
 		goto err;
 
 	/* target buffer starts right after flash_write_code, i. e.
 	 * wp and rp are implicitly included in buffer!!! */
-	fifo_start = write_algorithm->address + code_size + 2 * sizeof(uint32_t);
+	fifo_start = algorithm->address + codesize + 2 * sizeof(uint32_t);
 
 	init_reg_param(&reg_params[0], "r0", 32, PARAM_IN_OUT); /* count (in), status (out) */
 	init_reg_param(&reg_params[1], "r1", 32, PARAM_OUT);	/* flash pagesize */
@@ -1927,24 +2104,24 @@ static int cmspi_read_write_block(struct flash_bank *bank, uint8_t *buffer,
 
 	/* after breakpoint instruction (halfword) one nop (halfword) and
 	 * port_buffer till end of code */
-	exit_point = write_algorithm->address + code_size
+	exit_point = algorithm->address + codesize
 		- sizeof(uint32_t) - sizeof(port_buffer);
 
 	if (write) {
 		retval = target_run_flash_async_algorithm(target, buffer, count, 1,
 				0, NULL,
-				6, reg_params,
-				write_algorithm->address + code_size,
+				ARRAY_SIZE(reg_params), reg_params,
+				algorithm->address + codesize,
 				fifosize + 2 * sizeof(uint32_t),
-				write_algorithm->address, exit_point,
+				algorithm->address, exit_point,
 				&armv7m_info);
 	} else {
 		retval = target_run_read_async_algorithm(target, buffer, count, 1,
 				0, NULL,
-				6, reg_params,
-				write_algorithm->address + code_size,
+				ARRAY_SIZE(reg_params), reg_params,
+				algorithm->address + codesize,
 				fifosize + 2 * sizeof(uint32_t),
-				write_algorithm->address, exit_point,
+				algorithm->address, exit_point,
 				&armv7m_info);
 	}
 
@@ -1973,11 +2150,12 @@ err:
 		set_to_output(bank, false);
 
 		/* set NCS, ignoring errors */
-		(void) target_read_u32(target, cmspi_info->ncs.addr, &port);
-		SET_PORT_BIT(port, ncs);
+		target_read_u32(target, cmspi_info->ncs.addr, &port);
+		port |= (cmspi_info->ncs.mask);
+		target_write_u32(target, cmspi_info->ncs.addr, port);
 	}
 
-	target_free_working_area(target, write_algorithm);
+	target_free_working_area(target, algorithm);
 
 	return retval;
 }
@@ -1987,7 +2165,6 @@ static int cmspi_write(struct flash_bank *bank, const uint8_t *buffer,
 {
 	struct target *target = bank->target;
 	struct cmspi_flash_bank *cmspi_info = bank->driver_priv;
-	unsigned int sector;
 
 	LOG_DEBUG("%s: offset=0x%08" PRIx32 " count=0x%08" PRIx32,
 		__func__, offset, count);
@@ -2003,7 +2180,7 @@ static int cmspi_write(struct flash_bank *bank, const uint8_t *buffer,
 	}
 
 	/* check sector protection */
-	for (sector = 0; sector < bank->num_sectors; sector++) {
+	for (unsigned int sector = 0; sector < bank->num_sectors; sector++) {
 		/* Start offset in or before this sector? */
 		/* End offset in or behind this sector? */
 		if ((offset < (bank->sectors[sector].offset + bank->sectors[sector].size))
@@ -2046,9 +2223,74 @@ static int cmspi_read(struct flash_bank *bank, uint8_t *buffer,
 	return cmspi_read_write_block(bank, buffer, offset, count, false);
 }
 
+/* Find appropriate dummy setting */
+static int find_sfdp_dummy(struct flash_bank *bank)
+{
+	struct target *target = bank->target;
+	struct cmspi_flash_bank *cmspi_info = bank->driver_priv;
+	const int max_bytes = 64;
+	uint32_t port, data;
+	int len, retval;
+
+	/* clear NCS */
+	retval = target_read_u32(target, cmspi_info->ncs.addr, &port);
+	if (retval != ERROR_OK)
+		goto err;
+	CLR_PORT_BIT(port, ncs);
+	if (retval != ERROR_OK)
+		goto err;
+
+	/* set to output */
+	retval = set_to_output(bank, true);
+	if (retval != ERROR_OK)
+		goto err;
+
+	retval = cmspi_shift_out(bank, SPIFLASH_READ_SFDP);
+	if (retval != ERROR_OK)
+		goto err;
+
+	/* always three address bytes, in SPI, DPI, QPI modes */
+	for (len = 3; len > 0; --len) {
+		retval = cmspi_shift_out(bank, 0);
+		if (retval != ERROR_OK)
+			goto err;
+	}
+
+	/* set to input */
+	if (set_to_output(bank, false) != ERROR_OK)
+		goto err;
+
+	for (len = 0 ; len < max_bytes; len++) {
+		retval = cmspi_shift_in(bank, &data);
+		if (retval != ERROR_OK)
+			goto err;
+
+		if ((data & 0xFF) == 0x53) {
+			LOG_DEBUG("start of SFDP header after %d dummy bytes", len);
+			cmspi_info->sfdp_dummy = len;
+			break;
+		}
+	}
+
+	if (cmspi_info->sfdp_dummy == 0)
+		LOG_DEBUG("no start of SFDP header even after %d dummy bytes", len);
+
+err:
+	/* set to input */
+	set_to_output(bank, false);
+
+	/* set NCS */
+	retval = target_read_u32(target, cmspi_info->ncs.addr, &port);
+	if (retval != ERROR_OK)
+		return retval;
+
+	SET_PORT_BIT(port, ncs);
+	return retval;
+}
+
 /* Read SFDP parameter block */
-static int read_sfdp_block(struct flash_bank *bank, uint32_t addr, int addr_len,
-	int dummy, int words, uint32_t *buffer)
+static int read_sfdp_block(struct flash_bank *bank, uint32_t addr,
+	uint32_t words, uint32_t *buffer)
 {
 	struct target *target = bank->target;
 	struct cmspi_flash_bank *cmspi_info = bank->driver_priv;
@@ -2060,10 +2302,8 @@ static int read_sfdp_block(struct flash_bank *bank, uint32_t addr, int addr_len,
 		return ERROR_TARGET_NOT_HALTED;
 	}
 
-	if ((addr_len < 3) || (addr_len > 4)) {
-		LOG_ERROR("Invalid SFDP request");
-		return ERROR_FAIL;
-	}
+	LOG_DEBUG("%s: addr=0x%08" PRIx32 " words=0x%08" PRIx32 " dummy=%d",
+		__func__, addr, words, cmspi_info->dummy);
 
 	/* clear CLK */
 	retval = target_read_u32(target, cmspi_info->clk.addr, &port);
@@ -2082,9 +2322,16 @@ static int read_sfdp_block(struct flash_bank *bank, uint32_t addr, int addr_len,
 		goto err;
 
 	/* poll WIP */
-	retval = wait_till_ready(bank, MSOFTSPI_PROBE_TIMEOUT);
+	retval = wait_till_ready(bank, CMSPI_PROBE_TIMEOUT);
 	if ((retval != ERROR_OK) && (retval != ERROR_FLASH_BUSY))
 		return retval;
+
+	/* if number of dummy clocks not probed yet, do it now */
+	if (cmspi_info->sfdp_dummy == 0) {
+		retval = find_sfdp_dummy(bank);
+		if (retval != ERROR_OK)
+			return retval;
+	}
 
 	/* clear NCS */
 	CLR_PORT_BIT(port, ncs);
@@ -2100,8 +2347,8 @@ static int read_sfdp_block(struct flash_bank *bank, uint32_t addr, int addr_len,
 	if (retval != ERROR_OK)
 		goto err;
 
-	for (--addr_len ; addr_len >= 0; --addr_len) {
-		retval = cmspi_shift_out(bank, (addr >> (addr_len << 3)) & 0xFF);
+	for (len = 3; len > 0; ) {
+		retval = cmspi_shift_out(bank, (addr >> (--len << 3)) & 0xFF);
 		if (retval != ERROR_OK)
 			goto err;
 	}
@@ -2114,14 +2361,9 @@ static int read_sfdp_block(struct flash_bank *bank, uint32_t addr, int addr_len,
 	if (retval != ERROR_OK)
 		goto err;
 
-	/* issue dummy clocks */
-	for ( ; dummy > 0; --dummy) {
-		/* set CLK */
-		SET_PORT_BIT(port, clk);
-		if (retval != ERROR_OK)
-			goto err;
-		/* clr CLK */
-		CLR_PORT_BIT(port, clk);
+	/* read dummy *bytes* */
+	for (len = cmspi_info->sfdp_dummy ; len > 0; --len) {
+		retval = cmspi_shift_in(bank, &data);
 		if (retval != ERROR_OK)
 			goto err;
 	}
@@ -2156,12 +2398,12 @@ err:
 }
 
 /* Return ID of flash device */
-static int read_flash_id(struct flash_bank *bank, uint32_t *id, uint32_t cmd)
+static int read_flash_id(struct flash_bank *bank, uint32_t *id)
 {
 	struct target *target = bank->target;
 	struct cmspi_flash_bank *cmspi_info = bank->driver_priv;
 	uint32_t port, data;
-	int j, k, retval, success;
+	int j, k, retval, type, success;
 
 	/* invalidate id */
 	*id = 0;
@@ -2173,7 +2415,7 @@ static int read_flash_id(struct flash_bank *bank, uint32_t *id, uint32_t cmd)
 		(cmspi_info->mode != MODE_QPI))
 		return ERROR_FAIL;
 
-	if ((target->state != TARGET_HALTED) && (target->state != TARGET_RESET)) {
+	if (target->state != TARGET_HALTED) {
 		LOG_ERROR("Target not halted");
 		return ERROR_TARGET_NOT_HALTED;
 	}
@@ -2195,47 +2437,77 @@ static int read_flash_id(struct flash_bank *bank, uint32_t *id, uint32_t cmd)
 		goto err;
 
 	/* poll WIP */
-	retval = wait_till_ready(bank, MSOFTSPI_PROBE_TIMEOUT);
+	retval = wait_till_ready(bank, CMSPI_PROBE_TIMEOUT);
 	if ((retval != ERROR_OK) && (retval != ERROR_FLASH_BUSY))
 		return retval;
 
-	/* clear NCS */
-	CLR_PORT_BIT(port, ncs);
-	if (retval != ERROR_OK)
-		goto err;
+	for (type = 0; type < 2 ; type++) {
+		/* clear NCS */
+		retval = target_read_u32(target, cmspi_info->ncs.addr, &port);
+		if (retval != ERROR_OK)
+			goto err;
+		CLR_PORT_BIT(port, ncs);
+		if (retval != ERROR_OK)
+			goto err;
 
-	/* set to output */
-	retval = set_to_output(bank, true);
-	if (retval != ERROR_OK)
-		goto err;
+		/* set to output */
+		retval = set_to_output(bank, true);
+		if (retval != ERROR_OK)
+			goto err;
 
-	success = cmspi_shift_out(bank, cmd);
-	if (success != ERROR_OK)
-		goto err;
-
-	/* set to input */
-	if (set_to_output(bank, false) != ERROR_OK)
-		goto err;
-
-	for (k = 0; k < 3; k++) {
-		for (j = 0; j < 16; j++) {
-			success = cmspi_shift_in(bank, &data);
-			if (success != ERROR_OK)
-				goto err;
-			/* discard 'continuation code' 0x7F */
-			if ((data & 0xFF) != 0x7F)
+		/* Read id: one particular flash chip switches back to SPI mode when receiving
+		 * SPI_FLASH_READ_ID in QPI mode, hence try SPIFLASH_READ_MID first */
+		switch (type) {
+			case 0:
+				success = cmspi_shift_out(bank, SPIFLASH_READ_MID);
 				break;
-			else
-				data >>= 8;
+
+			case 1:
+				success = cmspi_shift_out(bank, SPIFLASH_READ_ID);
+				break;
+
+			default:
+				return ERROR_FAIL;
+		}
+		if (success != ERROR_OK)
+			goto err;
+
+		/* set to input */
+		if (set_to_output(bank, false) != ERROR_OK)
+			goto err;
+
+		for (k = 0; k < 3; k++) {
+			for (j = 0; j < 16; j++) {
+				success = cmspi_shift_in(bank, &data);
+				if (success != ERROR_OK)
+					goto err;
+				/* discard 'continuation code' 0x7F */
+				if ((data & 0xFF) != 0x7F)
+					break;
+				else
+					data >>= 8;
+			}
+		}
+
+		/* set NCS */
+		retval = target_read_u32(target, cmspi_info->ncs.addr, &port);
+		if (retval != ERROR_OK)
+			goto err;
+		SET_PORT_BIT(port, ncs);
+		if (retval != ERROR_OK)
+			goto err;
+
+		/* three bytes received, placed in bits 0 to 23, byte reversed */
+		*id = ((data & 0xFF) << 16) | (data & 0xFF00) | ((data & 0xFF0000) >> 16);
+		if ((*id != 0x000000) && (*id != 0xFFFFFF)) {
+			/* got an apparently valid id, so done */
+			break;
 		}
 	}
 
-	/* three bytes received, placed in bits 0 to 23, byte reversed */
-	*id = ((data & 0xFF) << 16) | (data & 0xFF00) | ((data & 0xFF0000) >> 16);
-
 	if ((*id == 0x000000) || (*id == 0xFFFFFF)) {
 		LOG_INFO("No response from flash");
-		success = ERROR_TARGET_NOT_EXAMINED;
+		success = ERROR_FLASH_BANK_NOT_PROBED;
 	}
 
 err:
@@ -2285,17 +2557,17 @@ static int cmspi_get_io_def(struct flash_bank *bank)
 	return ERROR_OK;
 }
 
-static int get_cmspi_info(struct flash_bank *bank, char *buf, int buf_size)
+static int get_cmspi_info(struct flash_bank *bank, struct command_invocation *cmd)
 {
 	struct cmspi_flash_bank *cmspi_info = bank->driver_priv;
 	struct flash_device *dev = &cmspi_info->dev;
 
 	if (!(cmspi_info->probed)) {
-		snprintf(buf, buf_size,	"\ncmspi flash bank not probed yet\n");
+		command_print_sameline(cmd,	"\ncmspi flash bank not probed yet\n");
 		return ERROR_FLASH_BANK_NOT_PROBED;
 	}
 
-	snprintf(buf, buf_size, "flash \'%s\', device id = 0x%06" PRIx32
+	command_print_sameline(cmd, "flash \'%s\', device id = 0x%06" PRIx32
 		", flash size = %" PRIu32 "%sBytes\n(page size = %d, read = 0x%02" PRIx8
 		", qread = 0x%02" PRIx8 ", pprog = 0x%02" PRIx8
 		", mass_erase = 0x%02" PRIx8 ", sector_size = %" PRIu32 "%sBytes"
@@ -2317,7 +2589,6 @@ static int cmspi_probe(struct flash_bank *bank)
 	struct flash_sector *sectors;
 	const struct flash_device *p;
 	uint32_t id = 0;
-	unsigned int sector;
 	int retval;
 
 	if (cmspi_info->probed) {
@@ -2327,6 +2598,7 @@ static int cmspi_probe(struct flash_bank *bank)
 			free(bank->sectors);
 		bank->sectors = NULL;
 		cmspi_info->probed = false;
+		cmspi_info->sfdp_dummy = 0;
 	}
 	memset(&cmspi_info->dev, 0, sizeof(cmspi_info->dev));
 
@@ -2339,20 +2611,18 @@ static int cmspi_probe(struct flash_bank *bank)
 			/* fall through */
 
 		case MODE_DPI:
+			/* in SPI/DPI modes set IO3/NHOLD and IO2/NWP to output high */
+			retval = deactivate_nhold_nwp(bank);
+			if (retval != ERROR_OK)
+				return retval;
 			/* fall through */
 
 		case MODE_QPI:
-			/* read and decode flash ID, try Read ID first */
-			retval = read_flash_id(bank, &id , SPIFLASH_READ_ID);
+			/* read and decode flash ID */
+			retval = read_flash_id(bank, &id);
 			LOG_DEBUG("id 0x%06" PRIx32, id);
 
-			/* read and decode flash ID, try Read Multi-IO ID second */
-			if (retval == ERROR_TARGET_NOT_EXAMINED) {
-				retval = read_flash_id(bank, &id , SPIFLASH_READ_MID);
-				LOG_DEBUG("id 0x%06" PRIx32, id);
-			}
-
-			if (retval == ERROR_TARGET_NOT_EXAMINED) {
+			if (retval == ERROR_FLASH_BANK_NOT_PROBED) {
 				/* no id retrieved, so id must be set manually */
 				LOG_INFO("no id - set flash parameters manually");
 				return ERROR_OK;
@@ -2396,12 +2666,9 @@ static int cmspi_probe(struct flash_bank *bank)
 			/* create and fill sectors array, 'no sectors' interpreted as 1 sector */
 			if (cmspi_info->dev.sectorsize == 0)
 				cmspi_info->dev.sectorsize = cmspi_info->dev.size_in_bytes;
-			/* if no pagesize, then use sectorsize instead */
+			/* if no pagesize, then use reasonable default instead */
 			if (cmspi_info->dev.pagesize == 0)
 				cmspi_info->dev.pagesize = SPIFLASH_DEF_PAGESIZE;
-
-			bank->write_start_alignment = cmspi_info->dev.pagesize;
-			bank->write_end_alignment = cmspi_info->dev.pagesize;
 
 			bank->num_sectors = cmspi_info->dev.size_in_bytes / cmspi_info->dev.sectorsize;
 			sectors = malloc(sizeof(struct flash_sector) * bank->num_sectors);
@@ -2410,7 +2677,7 @@ static int cmspi_probe(struct flash_bank *bank)
 				return ERROR_FAIL;
 			}
 
-			for (sector = 0; sector < bank->num_sectors; sector++) {
+			for (unsigned int sector = 0; sector < bank->num_sectors; sector++) {
 				sectors[sector].offset = sector * (cmspi_info->dev.sectorsize);
 				sectors[sector].size = cmspi_info->dev.sectorsize;
 				sectors[sector].is_erased = -1;
@@ -2455,7 +2722,6 @@ COMMAND_HANDLER(cmspi_handle_mass_erase)
 	struct duration bench;
 	uint32_t port, data;
 	int retval;
-	unsigned int sector;
 	uint8_t *buffer = NULL;
 
 	LOG_DEBUG("%s", __func__);
@@ -2480,7 +2746,7 @@ COMMAND_HANDLER(cmspi_handle_mass_erase)
 		return ERROR_FLASH_BANK_NOT_PROBED;
 	}
 
-	for (sector = 0; sector < bank->num_sectors; sector++) {
+	for (unsigned int sector = 0; sector < bank->num_sectors; sector++) {
 		if (bank->sectors[sector].is_protected) {
 			LOG_ERROR("Flash sector %d protected", sector);
 			return ERROR_FLASH_PROTECTED;
@@ -2538,7 +2804,7 @@ err:
 		}
 
 		/* poll WIP for end of self timed Sector Erase cycle */
-		retval = wait_till_ready(bank, MSOFTSPI_MASS_ERASE_TIMEOUT);
+		retval = wait_till_ready(bank, CMSPI_MASS_ERASE_TIMEOUT);
 	} else {
 		uint32_t count, offset;
 
@@ -2564,7 +2830,7 @@ err:
 	duration_measure(&bench);
 	if (retval == ERROR_OK) {
 		/* set all sectors as erased */
-		for (sector = 0; sector < bank->num_sectors; sector++)
+		for (unsigned int sector = 0; sector < bank->num_sectors; sector++)
 			bank->sectors[sector].is_erased = 1;
 
 		command_print(CMD, "cmspi mass erase completed in"
@@ -2589,16 +2855,16 @@ COMMAND_HANDLER(cmspi_handle_set)
 
 	LOG_DEBUG("%s", __func__);
 
-	retval = CALL_COMMAND_HANDLER(flash_command_get_bank, 0, &bank);
-	if (ERROR_OK != retval)
-		return retval;
-	cmspi_info = bank->driver_priv;
-
 	/* there are 3 mandatory arguments: devname, size_in_bytes, pagesize */
 	if (index + 3 > CMD_ARGC) {
 		command_print(CMD, "cmspi: not enough arguments");
 		return ERROR_COMMAND_SYNTAX_ERROR;
 	}
+
+	retval = CALL_COMMAND_HANDLER(flash_command_get_bank, 0, &bank);
+	if (ERROR_OK != retval)
+		return retval;
+	cmspi_info = bank->driver_priv;
 
 	/* invalidate all old info */
 	if (cmspi_info->probed) {
@@ -2608,6 +2874,7 @@ COMMAND_HANDLER(cmspi_handle_set)
 			free(bank->sectors);
 		bank->sectors = NULL;
 		cmspi_info->probed = false;
+		cmspi_info->sfdp_dummy = 0;
 	}
 	memset(&cmspi_info->dev, 0, sizeof(cmspi_info->dev));
 
@@ -2811,6 +3078,12 @@ COMMAND_HANDLER(cmspi_handle_set)
 	else
 		LOG_INFO("flash \'%s\' id = unknown\nflash size = %" PRIu32 "bytes",
 			cmspi_info->dev.name, cmspi_info->dev.size_in_bytes);
+
+	/* in SPI/DPI modes set IO3/NHOLD and IO2/NWP to output high */
+	retval = deactivate_nhold_nwp(bank);
+	if (retval != ERROR_OK)
+		return retval;
+
 	cmspi_info->probed = true;
 
 	return ERROR_OK;
@@ -2862,6 +3135,10 @@ COMMAND_HANDLER(cmspi_handle_cmd)
 			/* fall through */
 
 		case MODE_DPI:
+			/* in SPI/DPI modes set IO3/NHOLD and IO2/NWP to output high */
+			retval = deactivate_nhold_nwp(bank);
+			if (retval != ERROR_OK)
+				return retval;
 			/* fall through */
 
 		case MODE_QPI:
@@ -2885,7 +3162,7 @@ COMMAND_HANDLER(cmspi_handle_cmd)
 			/* send command byte */
 			snprintf(output, sizeof(output), "%s: %02" PRIx8 " ",
 				(cmspi_info->mode == MODE_SPI) ? "spi" :
-					(cmspi_info->mode == MODE_DPI) ? "dpi" : "qpi", (uint8_t)(cmd_byte & 0xFF));
+					(cmspi_info->mode == MODE_DPI) ? "dpi" : "qpi", cmd_byte & 0xFF);
 			retval = cmspi_shift_out(bank, cmd_byte);
 			if (retval != ERROR_OK)
 				goto err;
@@ -2893,7 +3170,7 @@ COMMAND_HANDLER(cmspi_handle_cmd)
 			/* send additional bytes */
 			for ( ; index < CMD_ARGC; index++) {
 				COMMAND_PARSE_NUMBER(u8, CMD_ARGV[index], cmd_byte);
-				snprintf(temp, sizeof(temp), "%02" PRIx8 " ", (uint8_t)(cmd_byte & 0xFF));
+				snprintf(temp, sizeof(temp), "%02" PRIx8 " ", cmd_byte & 0xFF);
 				retval = cmspi_shift_out(bank, cmd_byte);
 				if (retval != ERROR_OK)
 					goto err;
@@ -2912,7 +3189,7 @@ COMMAND_HANDLER(cmspi_handle_cmd)
 				retval = cmspi_shift_in(bank, &data);
 				if (retval != ERROR_OK)
 					goto err;
-				snprintf(temp, sizeof(temp), "%02" PRIx8 " ", (uint8_t)(data & 0xFF));
+				snprintf(temp, sizeof(temp), "%02" PRIx8 " ", data & 0xFF);
 				strncat(output, temp, sizeof(output) - strlen(output) - 1);
 			}
 			command_print(CMD, "%s", output);
@@ -2978,7 +3255,7 @@ COMMAND_HANDLER(cmspi_handle_cmd)
 						retval = cmspi_shift_in(bank, &data);
 						if (retval != ERROR_OK)
 							goto err;
-						snprintf(temp, sizeof(temp), " %02" PRIx8, (uint8_t)(data & 0xFF));
+						snprintf(temp, sizeof(temp), " %02" PRIx8, data & 0xFF);
 						strncat(output, temp, sizeof(output) - strlen(output) - 1);
 					}
 				}
@@ -3004,8 +3281,9 @@ err:
 		set_to_output(bank, false);
 
 		/* set NCS, ignoring errors */
-		(void) target_read_u32(target, cmspi_info->ncs.addr, &port);
-		SET_PORT_BIT(port, ncs);
+		target_read_u32(target, cmspi_info->ncs.addr, &port);
+		port |= (cmspi_info->ncs.mask);
+		target_write_u32(target, cmspi_info->ncs.addr, port);
 	}
 
 	return retval;
@@ -3036,8 +3314,11 @@ COMMAND_HANDLER(cmspi_handle_spi)
 
 	cmspi_info->mode = MODE_SPI;
 
+	/* force re-probing of SFDP dummy bytes */
+	cmspi_info->sfdp_dummy = 0;
+
 	/* set IO3/NHOLD and IO2/NWP to high */
-	deactivate_io3_io2(bank);
+	deactivate_nhold_nwp(bank);
 
 	return ERROR_OK;
 }
@@ -3073,8 +3354,11 @@ COMMAND_HANDLER(cmspi_handle_dpi)
 
 	cmspi_info->mode = MODE_DPI;
 
+	/* force re-probing of SFDP dummy bytes */
+	cmspi_info->sfdp_dummy = 0;
+
 	/* set IO3/NHOLD and IO2/NWP to high */
-	deactivate_io3_io2(bank);
+	deactivate_nhold_nwp(bank);
 
 	return ERROR_OK;
 }
@@ -3115,6 +3399,9 @@ COMMAND_HANDLER(cmspi_handle_qpi)
 	COMMAND_PARSE_NUMBER(u8, CMD_ARGV[1], cmspi_info->dummy);
 
 	cmspi_info->mode = MODE_QPI;
+
+	/* force re-probing of SFDP dummy bytes */
+	cmspi_info->sfdp_dummy = 0;
 
 	return ERROR_OK;
 }
@@ -3268,6 +3555,7 @@ const struct flash_driver cmspi_flash = {
 	.protect = cmspi_protect,
 	.write = cmspi_write,
 	.read = cmspi_read,
+	.verify = cmspi_verify,
 	.probe = cmspi_probe,
 	.auto_probe = cmspi_auto_probe,
 	.erase_check = cmspi_blank_check,

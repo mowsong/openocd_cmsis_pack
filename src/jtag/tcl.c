@@ -837,6 +837,13 @@ static int jim_jtag_names(Jim_Interp *interp, int argc, Jim_Obj *const *argv)
 	return JIM_OK;
 }
 
+static int jim_jtag_scan_test(Jim_Interp *interp, int argc, Jim_Obj *const *argv)
+{
+	extern bool do_scan_chain_test;
+	do_scan_chain_test = true;
+	return JIM_OK;
+}
+
 COMMAND_HANDLER(handle_jtag_init_command)
 {
 	if (CMD_ARGC != 0)
@@ -934,6 +941,12 @@ static const struct command_registration jtag_subcommand_handlers[] = {
 		.mode = COMMAND_ANY,
 		.jim_handler = jim_jtag_names,
 		.help = "Returns list of all JTAG tap names.",
+	},
+	{
+		.name = "scan_test",
+		.mode = COMMAND_CONFIG,
+		.jim_handler = jim_jtag_scan_test,
+		.help = "Requests JTAG scan chain test",
 	},
 	{
 		.chain = jtag_command_handlers_to_move,

@@ -4839,6 +4839,14 @@ command @command{gdb_port}.
 number of GDB connections that are allowed for the target. Default is 1.
 A negative value for @var{number} means unlimited connections.
 See @xref{gdbmeminspect,,Using GDB as a non-intrusive memory inspector}.
+
+@item @code{-memorymap} (@option{RO}|@option{WO}|@option{RW}) @var{start_address}
+@var{size} [@var{short_name}] [@var{long_name}] -- Add a memory map region.
+If any memory map regions are specified, then memory reads & writes are limited
+to only those areas - preventing accesses to invalid regions. Currently this does
+@emph{not} yet use the "qXfer:memory-map:read" packet to inform GDB of the valid
+regions.
+
 @end itemize
 @end deffn
 
@@ -5925,15 +5933,15 @@ read and page programming commands.
 
 GPIO clocks must be enabled, pins configured as GPIO output or input pins,
 respectively, in e. g. reset handler. If flash is connected with four I/O lines
-for QPI mode, the lines not used in SPI/DPI mode (NHOLD, NWP) must be taken into
-account, too. The initial state for NCS and CLK should be push-pull output, high,
-and digital input, pull-up enabled (if available), high for the data pins. In I2C mode
-both SDA and SCL should be initialized as digital input, pull-up enabled, high level.
+for QPI mode and all four are configured, in SPI/DPI modes the lines not used
+(IO3/NHOLD, IO2/NWP) will be actively driven high. The initial state for NCS and CLK
+should be push-pull output, high, and digital input, pull-up enabled (if available),
+high for the data pins. In I2C mode both SDA and SCL should be initialized as digital
+input, pull-up enabled, high level.
 
-If several banks use this driver, the GPIO setup should be completed for all
-of these banks before any is probed or any flash commands for these are
-attempted. Otherwise the idle GPIO settings for the various banks might interfere
-with each other.
+If several banks use this driver, the GPIO setup should be completed for all of
+these banks before any is probed or any flash commands for these are attempted.
+Otherwise the idle GPIO settings for the various banks might interfere with each other.
 
 (Non-) volatile chip settings like QPI mode or block protection have to be
 (dis)-engaged manually (by the 'cmd' command, see below) where applicable and

@@ -63,7 +63,7 @@ COMMAND_HELPER(flash_command_get_bank, unsigned name_index,
 	struct flash_bank **bank)
 {
 	return CALL_COMMAND_HANDLER(flash_command_get_bank_maybe_probe,
-					name_index, bank, true);
+				    name_index, bank, true);
 }
 
 COMMAND_HANDLER(handle_flash_info_command)
@@ -198,9 +198,14 @@ COMMAND_HANDLER(handle_flash_erase_check_command)
 	if (retval != ERROR_OK)
 		return retval;
 
+	struct duration bench;
+	duration_start(&bench);
+
 	retval = p->driver->erase_check(p);
-	if (retval == ERROR_OK)
-		command_print(CMD, "successfully checked erase state");
+
+	if (retval == ERROR_OK && (duration_measure(&bench) == ERROR_OK))
+		command_print(CMD, "successfully checked erase state in %0.3fs (%0.3f KiB/s)",
+					  duration_elapsed(&bench), duration_kbps(&bench, p->size));
 	else {
 		command_print(CMD,
 			"unknown error when checking erase state of flash bank #%s at "
@@ -592,7 +597,7 @@ COMMAND_HANDLER(handle_flash_fill_command)
 		LOG_INFO("Start address " TARGET_ADDR_FMT
 			" breaks the required alignment of flash bank %s",
 			address, bank->name);
-		LOG_WARNING("Padding %" PRIu32 " bytes from " TARGET_ADDR_FMT,
+		LOG_INFO("Padding %" PRIu32 " bytes from " TARGET_ADDR_FMT,
 		    padding_at_start, aligned_start);
 	}
 
@@ -715,7 +720,7 @@ static int byte_buffer_from_string(const char *str, uint8_t **buffer, size_t *si
 	int hr;
 
 	/* Ensure input hex string has even length */
-	int len = strlen(str);
+	unsigned long len = strlen(str);
 	if (len % 2) {
 		LOG_ERROR("Length of hex string is not a multiple of two");
 		return ERROR_COMMAND_ARGUMENT_INVALID;
@@ -747,7 +752,7 @@ static int byte_buffer_from_string(const char *str, uint8_t **buffer, size_t *si
 	return ERROR_OK;
 
 cleanup:
-	free(buf);
+	free(*buffer);
 	*buffer = NULL;
 	*size = 0;
 
@@ -863,13 +868,14 @@ COMMAND_HANDLER(handle_flash_rmw_command)
 					", read back 0x%02" PRIx32 ", expected 0x%02" PRIx32,
 					rmw_start_aligned + i, verify_buf[i], rmw_buf_aligned[i]);
 				hr = ERROR_FAIL;
-				break;
 			}
 		}
 
-		hr = duration_measure(&bench);
-		if (hr != ERROR_OK)
+		int hr2 = duration_measure(&bench);
+		if (hr2 != ERROR_OK) {
+			hr = hr2;
 			goto free_verify_buffer;
+		}
 
 		command_print(CMD, "verified %" PRIu32 " bytes in %fs (%0.3f KiB/s)",
 			rmw_size_aligned, duration_elapsed(&bench),
@@ -1019,7 +1025,7 @@ COMMAND_HANDLER(handle_flash_write_bank_command)
 		LOG_INFO("Start offset 0x%08" PRIx32
 			" breaks the required alignment of flash bank %s",
 			offset, bank->name);
-		LOG_WARNING("Padding %" PRIu32 " bytes from " TARGET_ADDR_FMT,
+		LOG_INFO("Padding %" PRIu32 " bytes from " TARGET_ADDR_FMT,
 		    padding_at_start, aligned_start);
 	}
 
