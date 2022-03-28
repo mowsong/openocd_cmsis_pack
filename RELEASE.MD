@@ -1,19 +1,17 @@
-### Cypress OpenOCD v4.3.0 Release Notes
+### Cypress OpenOCD v4.3.1 Release Notes
 
 Please refer to the README.md for a complete description of the Cypress customized version of OpenOCD.
 
 ### New Features
 
-- Adds support external serial memory flashing of PSOC™ 6 MCUs via the Serial Flash Discoverable Parameters (SFDP) standard to query the attached flash memory at runtime.
-- Improves support of CYW43907 and CYW53907 devices 
-- Adds support of CCG4, CCG3PA and CCG7D devices 
-- Delivers few minor improvements and fixes for various defects
+- Adds support of WLC1 devices
+- Access to the SFlash User Rows is blocked on CCGx, PMG1 and WLCx devices
 
 ### Known Issues
 
-| ID                                | Known Issue                       | Workaround                          | 
+| ID                                | Known Issue                       | Workaround                          |
 |-----------------------------------|-----------------------------------|-----------------------------------|
-|  PROGTOOLS-1425 | A “JTAG-DP STICKY ERROR” message may appear in the IDE when connected via the JTAG interface of a MiniProg4 probe in CMSIS-DAP HID mode.  |  You can safely ignore this error, or switch the MiniProg4 to CMSIS-DAP bulk mode. | 
+|  PROGTOOLS-1425 | A “JTAG-DP STICKY ERROR” message may appear in the IDE when connected via the JTAG interface of a MiniProg4 probe in CMSIS-DAP HID mode.  |  You can safely ignore this error, or switch the MiniProg4 to CMSIS-DAP bulk mode. |
 | PROGTOOLS-1429  | JTAG performance on MiniProg4 may be significantly slower than SWD.  |  Use the SWD interface if JTAG performance is not acceptable. |
 |  PROGTOOLS-1869 | In Linux OS, with KitProg3 in CMSIS-DAP HID mode, a debug session in ModusToolbox can be destroyed if you use the Firmware Loader --device-list command while debugging. This is limitation of hidapi library used on Linux. MacOS and Windows OSs are not impacted. | If you have a debug session running, don't use the firmware loader tool.  |
 |  PROGTOOLS-2388 | PSoC 64 Secure MCUs do not support the programming and debugging via JTAG interface.  It is because of the specifics of PSoC 64 MCUs - JTAG pins are configured after unpredictable amount of time after what causes a lot of warnings during programming via JTAG. | Use SWD interface with PSoC 64 Secure MCUs.  |
@@ -25,7 +23,7 @@ Please refer to the README.md for a complete description of the Cypress customiz
 
 -   [openOCD
     README.md](https://github.com/cypresssemiconductorco/openocd/blob/cypress/README.MD)
-    
+
 -   [openOCD User Guide](https://www.cypress.com/file/495061/download)
 
 -   [ModusToolbox Software Environment, Quick Start Guide, Documentation, and
@@ -36,4 +34,4 @@ Please refer to the README.md for a complete description of the Cypress customiz
 
 -   [Cypress Semiconductor, an Infineon Technologies Company](http://www.cypress.com)
 
-© Cypress Semiconductor Corporation, 2020-2021. This document is the property of Cypress Semiconductor Corporation, an Infineon Technologies company, and its affiliates ("Cypress"). 
+© Cypress Semiconductor Corporation, 2020-2022. This document is the property of Cypress Semiconductor Corporation, an Infineon Technologies company, and its affiliates ("Cypress").

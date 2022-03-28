@@ -162,6 +162,7 @@
 
 #define PSOC4_FAMILY_FLAG_LEGACY        (1u << 0)
 #define PSOC4_FLAG_IMO_NOT_REQUIRED     (1u << 1)
+#define PSOC4_FLAG_NO_USER_SFLASH       (1u << 2)
 
 #define RAM_STACK_WA_SIZE 512
 
@@ -254,29 +255,30 @@ const struct psoc4_chip_family psoc4_families[] = {
 	{ 0xA1, {0, 0},           "PSoC 4100M/4200M",                     .flags = PSOC4_FLAG_IMO_NOT_REQUIRED, .spcif_ver = spcif_v2 },
 	{ 0xA3, {0, 0},           "PSoC 4xx8 BLE",                        .flags = PSOC4_FLAG_IMO_NOT_REQUIRED, .spcif_ver = spcif_v2 },
 	{ 0xA7, {0, 0},           "PSoC 4000DS/4200DS",                   .flags = 0, .spcif_ver = spcif_v2 },
-	{ 0xA8, {0, 0},           "CCG4",                                 .flags = 0, .spcif_ver = spcif_v2 },
+	{ 0xA8, {0, 0},           "CCG4",                                 .flags = PSOC4_FLAG_NO_USER_SFLASH, .spcif_ver = spcif_v2 },
 	{ 0xA9, {0, 0},           "PSoC 4000S/4700S",                     .flags = 0, .spcif_ver = spcif_v3 },
 	{ 0xAA, {0, 0},           "PSoC 4xx8 BLE",                        .flags = PSOC4_FLAG_IMO_NOT_REQUIRED, .spcif_ver = spcif_v2 },
 	{ 0xAB, {0, 0},           "PSoC 4100S",                           .flags = 0, .spcif_ver = spcif_v3 },
 	{ 0xAC, {0, 0},           "PSoC 4100PS/PSoC Analog Coprocessor",  .flags = 0, .spcif_ver = spcif_v3 },
-	{ 0xAD, {0x1D20, 0x1DFF}, "PMG1-S2",                              .flags = 0, .spcif_ver = spcif_v3 },
-	{ 0xAD, {0x1D00, 0x1D1F}, "CCG3",                                 .flags = 0, .spcif_ver = spcif_v3 },
+	{ 0xAD, {0x1D20, 0x1DFF}, "PMG1-S2",                              .flags = PSOC4_FLAG_NO_USER_SFLASH, .spcif_ver = spcif_v3 },
+	{ 0xAD, {0x1D00, 0x1D1F}, "CCG3",                                 .flags = PSOC4_FLAG_NO_USER_SFLASH, .spcif_ver = spcif_v3 },
 	{ 0xAE, {0, 0},           "PSoC 4xx8 BLE",                        .flags = PSOC4_FLAG_IMO_NOT_REQUIRED, .spcif_ver = spcif_v2 },
-	{ 0xAF, {0, 0},           "CCG4",                                 .flags = 0, .spcif_ver = spcif_v2 },
-	{ 0xB0, {0x2020, 0x204F}, "PMG1-S0",                              .flags = 0, .spcif_ver = spcif_v3 },
-	{ 0xB0, {0x2000, 0x20FF}, "CCG3PA",                               .flags = 0, .spcif_ver = spcif_v3 },
+	{ 0xAF, {0, 0},           "CCG4",                                 .flags = PSOC4_FLAG_NO_USER_SFLASH, .spcif_ver = spcif_v2 },
+	{ 0xB0, {0x2020, 0x204F}, "PMG1-S0",                              .flags = PSOC4_FLAG_NO_USER_SFLASH, .spcif_ver = spcif_v3 },
+	{ 0xB0, {0x2000, 0x20FF}, "CCG3PA",                               .flags = PSOC4_FLAG_NO_USER_SFLASH, .spcif_ver = spcif_v3 },
 	{ 0xB5, {0, 0},           "PSoC 4100S Plus",                      .flags = 0, .spcif_ver = spcif_v3 },
 	{ 0xB7, {0, 0},           "TrueTouch TSG7L",                      .flags = 0, .spcif_ver = spcif_v3 },
 	{ 0xB8, {0, 0},           "PSoC 4100S Plus/PSoC 4500",            .flags = 0, .spcif_ver = spcif_v3 },
-	{ 0xBA, {0x2A20, 0x2AFF}, "PMG1-S1",                              .flags = 0, .spcif_ver = spcif_v3 },
-	{ 0xBA, {0x2A00, 0x2A1F}, "CCG6",                                 .flags = 0, .spcif_ver = spcif_v3 },
+	{ 0xBA, {0x2A20, 0x2AFF}, "PMG1-S1",                              .flags = PSOC4_FLAG_NO_USER_SFLASH, .spcif_ver = spcif_v3 },
+	{ 0xBA, {0x2A00, 0x2A1F}, "CCG6",                                 .flags = PSOC4_FLAG_NO_USER_SFLASH, .spcif_ver = spcif_v3 },
 	{ 0xBE, {0, 0},           "PSoC 4100S Max",                       .flags = 0, .spcif_ver = spcif_v3 },
-	{ 0xC0, {0, 0},           "CCG6DF",                               .flags = 0, .spcif_ver = spcif_v3 },
-	{ 0xC1, {0, 0},           "CCG7D",                                .flags = 0, .spcif_ver = spcif_v3 },
+	{ 0xC0, {0, 0},           "CCG6DF",                               .flags = PSOC4_FLAG_NO_USER_SFLASH, .spcif_ver = spcif_v3 },
+	{ 0xC1, {0x3100, 0x317F}, "CCG7D",                                .flags = PSOC4_FLAG_NO_USER_SFLASH, .spcif_ver = spcif_v3 }, /* SJZ-733 */
+	{ 0xC1, {0x3180, 0x31FF}, "WLC1",                                 .flags = PSOC4_FLAG_NO_USER_SFLASH, .spcif_ver = spcif_v3 }, /* SJZ-733 */
 	{ 0xC2, {0, 0},           "PSoC4 HV PA",                          .flags = 0, .spcif_ver = spcif_v3 },
-	{ 0xC3, {0, 0},           "CCG6SF",                               .flags = 0, .spcif_ver = spcif_v3 },
-	{ 0xC5, {0, 0},           "PMG1-S3",                              .flags = 0, .spcif_ver = spcif_v3 },
-	{ 0xCA, {0, 0},           "CCG7S",                                .flags = 0, .spcif_ver = spcif_v3 },
+	{ 0xC3, {0, 0},           "CCG6SF",                               .flags = PSOC4_FLAG_NO_USER_SFLASH, .spcif_ver = spcif_v3 },
+	{ 0xC5, {0, 0},           "PMG1-S3",                              .flags = PSOC4_FLAG_NO_USER_SFLASH, .spcif_ver = spcif_v3 },
+	{ 0xCA, {0, 0},           "CCG7S",                                .flags = PSOC4_FLAG_NO_USER_SFLASH, .spcif_ver = spcif_v3 },
 	{ 0,    {0, 0},           "Unknown",                              .flags = 0, .spcif_ver = spcif_unknown }
 };
 
@@ -295,6 +297,7 @@ struct psoc4_flash_bank {
 	uint16_t family_id;
 	bool legacy_family;
 	bool imo_required;
+	bool has_user_sflash;
 	uint32_t cpuss_sysreq_addr;
 	uint32_t cpuss_sysarg_addr;
 	uint32_t sflash_base;
@@ -1229,6 +1232,13 @@ static int psoc4_write_inner(struct flash_bank *bank, const uint8_t *buffer,
 	uint32_t sflash_mask = 0;
 	uint32_t wflash_mask = 0;
 
+	struct psoc4_flash_bank *psoc4_info = bank->driver_priv;
+
+	if (is_sflash_bank(bank) && !psoc4_info->has_user_sflash) {
+		LOG_ERROR("This device does not support User's SFlash rows, please check your commands/programming file");
+		return ERROR_FAIL;
+	}
+
 	if (is_sflash_bank(bank)) sflash_mask = 0x80000000;
 	else if (is_wflash_bank(bank)) sflash_mask = 0x40000000;
 
@@ -1241,7 +1251,6 @@ static int psoc4_write_inner(struct flash_bank *bank, const uint8_t *buffer,
 	};
 
 	struct target *target = bank->target;
-	struct psoc4_flash_bank *psoc4_info = bank->driver_priv;
 	const uint8_t *algo_p = psoc4_info->legacy_family ? p4_legacy_algo : p4_current_algo;
 	const size_t algo_size =
 		psoc4_info->legacy_family ? sizeof(p4_legacy_algo) : sizeof (p4_current_algo);
@@ -1700,6 +1709,10 @@ static int psoc4_read_geometry(struct flash_bank *bank, uint16_t *family_id, uin
 	psoc4_info->imo_required = true;
 	if (family->flags & PSOC4_FLAG_IMO_NOT_REQUIRED)
 		psoc4_info->imo_required = false;
+
+	psoc4_info->has_user_sflash = true;
+	if (family->flags & PSOC4_FLAG_NO_USER_SFLASH)
+		psoc4_info->has_user_sflash = false;
 
 	uint32_t spcif_geometry;
 	retval = target_read_u32(target, psoc4_info->spcif->geometry_addr, &spcif_geometry);
