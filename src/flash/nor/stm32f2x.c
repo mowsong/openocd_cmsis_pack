@@ -19,6 +19,7 @@
 #include <helper/binarybuffer.h>
 #include <target/algorithm.h>
 #include <target/cortex_m.h>
+#include <flash/progress.h>
 
 /* Regarding performance:
  *
@@ -623,6 +624,8 @@ static int stm32x_erase(struct flash_bank *bank, unsigned int first,
 	4. Wait for the BSY bit to be cleared
 	 */
 
+	unsigned int num_sectors = last - first + 1;
+	progress_init(num_sectors, ERASING);
 	for (unsigned int i = first; i <= last; i++) {
 		unsigned int snb;
 		if (stm32x_info->has_large_mem && i >= (bank->num_sectors / 2))
@@ -633,18 +636,21 @@ static int stm32x_erase(struct flash_bank *bank, unsigned int first,
 		retval = target_write_u32(target,
 				stm32x_get_flash_reg(bank, STM32_FLASH_CR), FLASH_SER | FLASH_SNB(snb) | FLASH_STRT);
 		if (retval != ERROR_OK)
-			return retval;
+			goto exit;
 
 		retval = stm32x_wait_status_busy(bank, FLASH_ERASE_TIMEOUT);
 		if (retval != ERROR_OK)
-			return retval;
+			goto exit;
+
+		num_sectors--;
+		progress_left(num_sectors);
 	}
 
 	retval = target_write_u32(target, stm32x_get_flash_reg(bank, STM32_FLASH_CR), FLASH_LOCK);
-	if (retval != ERROR_OK)
-		return retval;
 
-	return ERROR_OK;
+exit:
+	progress_done(retval);
+	return retval;
 }
 
 static int stm32x_protect(struct flash_bank *bank, int set, unsigned int first,

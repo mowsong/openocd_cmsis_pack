@@ -143,6 +143,9 @@ m4_define([HIDAPI_ADAPTERS],
 m4_define([HIDAPI_USB1_ADAPTERS],
 	[[[kitprog], [Cypress KitProg Programmer], [KITPROG]]])
 
+m4_define([CMSIS_DAP_COMPAT_ADAPTERS],
+	[[[kitprog3], [Cypress KitProg3 Programmer], [KITPROG3]]])
+	
 m4_define([LIBFTDI_ADAPTERS],
 	[[[usb_blaster], [Altera USB-Blaster Compatible], [USB_BLASTER]],
 	[[presto], [ASIX Presto Adapter], [PRESTO]]])
@@ -260,6 +263,7 @@ AC_ARG_ADAPTERS([
   USB1_ADAPTERS,
   HIDAPI_ADAPTERS,
   HIDAPI_USB1_ADAPTERS,
+  CMSIS_DAP_COMPAT_ADAPTERS,
   LIBFTDI_ADAPTERS,
   LIBFTDI_USB1_ADAPTERS
   LIBGPIOD_ADAPTERS,
@@ -687,6 +691,7 @@ PROCESS_ADAPTERS([USB1_ADAPTERS], ["x$use_libusb1" = "xyes"], [libusb-1.x])
 PROCESS_ADAPTERS([DEPRECATED_USB1_ADAPTERS], ["x$use_libusb1" = "xyes"], [libusb-1.x])
 PROCESS_ADAPTERS([HIDAPI_ADAPTERS], ["x$use_hidapi" = "xyes"], [hidapi])
 PROCESS_ADAPTERS([HIDAPI_USB1_ADAPTERS], ["x$use_hidapi" = "xyes" -a "x$use_libusb1" = "xyes"], [hidapi and libusb-1.x])
+PROCESS_ADAPTERS([CMSIS_DAP_COMPAT_ADAPTERS], ["x$enable_cmsis_dap" != "xno" -o "x$enable_cmsis_dap_v2" != "xno"], [cmsis_dap or cmsis_dap_v2])
 PROCESS_ADAPTERS([LIBFTDI_ADAPTERS], ["x$use_libftdi" = "xyes"], [libftdi])
 PROCESS_ADAPTERS([LIBFTDI_USB1_ADAPTERS], ["x$use_libftdi" = "xyes" -a "x$use_libusb1" = "xyes"], [libftdi and libusb-1.x])
 PROCESS_ADAPTERS([LIBGPIOD_ADAPTERS], ["x$use_libgpiod" = "xyes"], [libgpiod])
@@ -829,7 +834,7 @@ echo OpenOCD configuration summary
 echo --------------------------------------------------
 m4_foreach([adapter], [USB1_ADAPTERS,
 	DEPRECATED_USB1_ADAPTERS,
-	HIDAPI_ADAPTERS, HIDAPI_USB1_ADAPTERS, LIBFTDI_ADAPTERS,
+	HIDAPI_ADAPTERS, HIDAPI_USB1_ADAPTERS, CMSIS_DAP_COMPAT_ADAPTERS, LIBFTDI_ADAPTERS,
 	LIBFTDI_USB1_ADAPTERS,
 	LIBGPIOD_ADAPTERS,
 	LIBJAYLINK_ADAPTERS, PCIE_ADAPTERS, SERIAL_PORT_ADAPTERS,

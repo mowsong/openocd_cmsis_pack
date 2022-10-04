@@ -64,6 +64,8 @@
 #define MEM_IPC2_INTR_MASK             0x40221008u
 #define MEM_VTBASE2_CM0                0x40201120u
 #define MEM_VTBASE2_CM4                0x40200200u
+#define MEM_VTBASE2_CM70               0x40200200u
+#define MEM_VTBASE2_CM71               0x40200600u
 #define MEM_IPC2_ACQUIRE               (MEM_BASE_IPC2 + 0x00u)
 #define MEM_IPC2_NOTIFY                (MEM_BASE_IPC2 + 0x08u)
 #define MEM_IPC2_DATA                  (MEM_BASE_IPC2 + 0x0Cu)
@@ -103,7 +105,7 @@ const struct mxs40_regs traveo2_8m_regs = {
 	.ipc_lock_stat = MEM_IPC3_LOCK_STATUS,
 	.ipc_intr = MEM_IPC2_INTR_MASK,
 	.ipc_intr_msk = IPC_INTR_MASK_3_CORE,
-	.vtbase = {MEM_VTBASE2_CM0, MEM_VTBASE2_CM4, 0, },
+	.vtbase = {MEM_VTBASE2_CM0, MEM_VTBASE2_CM70, MEM_VTBASE2_CM71, },
 	.mem_base_main = {0x10000000, // present on Si and PSVP
 					  0x102f8000, 0x105F0000, 0x10610000, // 6M PSVP
 					  0x10400000, // 8M PSVP
@@ -200,7 +202,7 @@ static int traveo2_configure_ecc(struct target *target, bool enabled)
  * @param bank The flash bank
  * @return ERROR_OK in case of success, ERROR_XXX code otherwise
  *************************************************************************************************/
-static int traveo2_prepare(struct flash_bank *bank)
+int traveo2_prepare(struct flash_bank *bank)
 {
 	int hr = target_write_u32(bank->target, 0x4024F400, 0x01);
 	if (hr != ERROR_OK)
@@ -215,6 +217,18 @@ static int traveo2_prepare(struct flash_bank *bank)
 		return hr;
 
 	hr = target_write_u32(bank->target, 0xE000E100, 0x03);
+	if (hr != ERROR_OK)
+		return hr;
+
+	/* RAM0_CTL0.ECC_CHECK_DIS, bit 19 */
+	uint32_t ram0_ctl0;
+	hr = target_read_u32(bank->target, 0x40201300, &ram0_ctl0);
+	if (hr != ERROR_OK)
+		return hr;
+
+	ram0_ctl0 |= BIT(19);
+
+	hr = target_write_u32(bank->target, 0x40201300, ram0_ctl0);
 	if (hr != ERROR_OK)
 		return hr;
 
@@ -570,6 +584,17 @@ static const struct command_registration traveo2_command_handlers[] = {
 	COMMAND_REGISTRATION_DONE
 };
 
+static const struct command_registration cat1c_command_handlers[] = {
+	{
+		.name = "cat1c",
+		.mode = COMMAND_ANY,
+		.help = "cat1c flash command group",
+		.usage = "",
+		.chain = tv2_exec_command_handlers,
+	},
+	COMMAND_REGISTRATION_DONE
+};
+
 struct flash_driver traveo21_flash = {
 	.name = "traveo21",
 	.commands = traveo2_command_handlers,
@@ -589,6 +614,22 @@ struct flash_driver traveo21_flash = {
 struct flash_driver traveo22_flash = {
 	.name = "traveo22",
 	.commands = traveo2_command_handlers,
+	.flash_bank_command = traveo2_8m_flash_bank_command,
+	.erase = traveo2_erase,
+	.protect = mxs40_protect,
+	.write = mxs40_program,
+	.read = traveo2_flash_read,
+	.probe = traveo2_probe,
+	.auto_probe = mxs40_auto_probe,
+	.erase_check = default_flash_blank_check,
+	.protect_check = mxs40_protect_check,
+	.info = mxs40_get_info,
+	.free_driver_priv = mxs40_free_driver_priv,
+};
+
+struct flash_driver cat1c_flash = {
+	.name = "cat1c",
+	.commands = cat1c_command_handlers,
 	.flash_bank_command = traveo2_8m_flash_bank_command,
 	.erase = traveo2_erase,
 	.protect = mxs40_protect,

@@ -28,6 +28,7 @@ extern const struct flash_driver cfi_flash;
 extern const struct flash_driver cmsis_flash;
 extern const struct flash_driver cmspi_flash;
 extern const struct flash_driver dsp5680xx_flash;
+extern const struct flash_driver dummy_flash;
 extern const struct flash_driver efm32_flash;
 extern const struct flash_driver em357_flash;
 extern const struct flash_driver esirisc_flash;
@@ -54,8 +55,6 @@ extern const struct flash_driver numicro_flash;
 extern const struct flash_driver ocl_flash;
 extern const struct flash_driver pic32mx_flash;
 extern const struct flash_driver psoc4_flash;
-extern const struct flash_driver psoc4_flash_prot;
-extern const struct flash_driver psoc4hv_flash;
 extern const struct flash_driver psoc5lp_flash;
 extern const struct flash_driver psoc5lp_eeprom_flash;
 extern const struct flash_driver psoc5lp_nvl_flash;
@@ -90,6 +89,8 @@ extern const struct flash_driver w600_flash;
 extern const struct flash_driver xcf_flash;
 extern const struct flash_driver xmc1xxx_flash;
 extern const struct flash_driver xmc4xxx_flash;
+extern const struct flash_driver cat1c_efuse;
+extern const struct flash_driver cat1c_flash;
 
 /**
  * The list of built-in flash drivers.
@@ -115,6 +116,7 @@ static const struct flash_driver * const flash_drivers[] = {
 	&cmsis_flash,
 	&cmspi_flash,
 	&dsp5680xx_flash,
+	&dummy_flash,
 	&efm32_flash,
 	&em357_flash,
 	&esirisc_flash,
@@ -141,8 +143,6 @@ static const struct flash_driver * const flash_drivers[] = {
 	&ocl_flash,
 	&pic32mx_flash,
 	&psoc4_flash,
-	&psoc4_flash_prot,
-	&psoc4hv_flash,
 	&psoc5lp_flash,
 	&psoc5lp_eeprom_flash,
 	&psoc5lp_nvl_flash,
@@ -176,6 +176,8 @@ static const struct flash_driver * const flash_drivers[] = {
 	&xcf_flash,
 	&xmc1xxx_flash,
 	&xmc4xxx_flash,
+	&cat1c_efuse,
+	&cat1c_flash,
 	&w600_flash,
 	NULL,
 };

@@ -1349,8 +1349,16 @@ static int resolve_section_names(struct image_elf *elf, Elf32_Shdr *sect_hdrs,
 		struct symbol *crnt_symbol = symbols;
 		while (crnt_symbol->name) {
 			const uint32_t sh_name = field32(elf, sect_hdrs[i].sh_name);
-			if (!strcmp(str_tbl + sh_name, crnt_symbol->name))
-				crnt_symbol->offset = field32(elf, sect_hdrs[i].sh_addr);
+			if (!strcmp(str_tbl + sh_name, crnt_symbol->name)) {
+				const uint32_t sh_addr = field32(elf, sect_hdrs[i].sh_addr);
+				if (crnt_symbol->offset != UINT32_MAX) {
+					LOG_ERROR("Duplicate section '%s' (already resolved to 0x%" PRIx32
+							  ", new value 0x%" PRIx32 " ignored)", crnt_symbol->name, crnt_symbol->offset, sh_addr);
+				} else {
+					crnt_symbol->offset = sh_addr;
+					LOG_DEBUG("SEC %12s: 0x%08X", crnt_symbol->name, crnt_symbol->offset);
+				}
+			}
 
 			crnt_symbol++;
 		}
@@ -1372,6 +1380,10 @@ int image_resolve_symbols(struct image *image, struct symbol *symbols)
 		LOG_ERROR("Symbol resolution is supported for ELF images only");
 		return ERROR_IMAGE_FORMAT_ERROR;
 	}
+
+	/* Initialize all symbol offsets to some invalid value */
+	for(struct symbol *crnt_symbol = symbols; crnt_symbol->name; crnt_symbol++)
+		crnt_symbol->offset = UINT32_MAX;
 
 	struct image_elf *elf = image->type_private;
 	uint32_t sh_offs, sh_size;
@@ -1447,8 +1459,16 @@ int image_resolve_symbols(struct image *image, struct symbol *symbols)
 		while (crnt_symbol->name) {
 			uint32_t st_name = field32(elf, sym_table[j].st_name);
 			if(sym_table[j].st_shndx != 0 /* STN_UNDEF */)
-				if (!strcmp(&strtab[st_name], crnt_symbol->name))
-					crnt_symbol->offset = sym_table[j].st_value;
+				if (!strcmp(&strtab[st_name], crnt_symbol->name)) {
+					const uint32_t st_value = sym_table[j].st_value;
+					if (crnt_symbol->offset != UINT32_MAX) {
+						LOG_ERROR("Duplicate symbol '%s' (already resolved to 0x%" PRIx32
+								  ", new value 0x%" PRIx32 " ignored)", crnt_symbol->name, crnt_symbol->offset, st_value);
+					} else {
+						crnt_symbol->offset = st_value;
+						LOG_DEBUG("SYM %12s: 0x%08X", crnt_symbol->name, crnt_symbol->offset);
+					}
+				}
 
 			crnt_symbol++;
 		}

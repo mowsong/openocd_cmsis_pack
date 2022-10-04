@@ -504,9 +504,17 @@ static int efuse_read_byte(struct flash_bank *bank, uint16_t addr, uint8_t *efus
 {
 	uint32_t data_out = 0;
 
-	int hr = mxs40_call_sromapi(bank, SROMAPI_READ_FUSE_BYTE + (addr << 8), 0, &data_out);
-	if (hr != ERROR_OK)
-		return hr;
+	/* Some eFuse regions may be protected, for these regions the SROM API will return
+	 * an error STATUS_NVM_PROTECTED. Check for this particular error and handle it later. */
+	int hr = mxs40_call_sromapi_inner(bank, SROMAPI_READ_FUSE_BYTE + (addr << 8), 0, false, &data_out);
+	if (data_out == 0xF0000005)
+		return ERROR_FLASH_PROTECTED;
+
+	bool is_error = (data_out & SROMAPI_STATUS_MSK) != SROMAPI_STAT_SUCCESS;
+	if (is_error) {
+		LOG_ERROR("SROM API execution failed. Status: 0x%08X", (uint32_t)data_out);
+		return ERROR_TARGET_FAILURE;
+	}
 
 	*efuse_byte_value = (uint8_t)data_out;
 
@@ -939,20 +947,6 @@ exit:
 }
 
 /** ***********************************************************************************************
- * @brief Checks if passed bank belongs to TVII device
- * @param bank current flash bank
- * @return true if passed bank belongs to TVII, false - otherwise
- *************************************************************************************************/
-static bool efuse_is_tv2 (struct flash_bank *bank){
-	bool ret = false;
-	struct mxs40_bank_info *info = bank->driver_priv;
-	if(info->regs->variant == MXS40_VARIANT_TRAVEO_II || info->regs->variant == MXS40_VARIANT_TRAVEO_II_8M)
-		ret = true;
-
-	return ret;
-}
-
-/** ***********************************************************************************************
  * @brief Checks if passed bank belongs to Macaw device
  * @param bank current flash bank
  * @return true if passed bank belongs to Macaw, false - otherwise
@@ -977,10 +971,10 @@ static bool efuse_is_macaw (struct flash_bank *bank){
 int efuse_program_bank(struct flash_bank *bank, const uint8_t *buffer, uint32_t offset,
 	uint32_t count)
 {
-	bool is_tv2 = efuse_is_tv2(bank);
+	assert(bank->driver->commands[0].name);
 
 	if (!g_allow_efuse_programming && !efuse_is_macaw(bank)) {
-		const char* dev_type = is_tv2 ? "traveo2" : "psoc 6";
+		const char* dev_type = bank->driver->commands[0].name;
 		LOG_WARNING("Programming of eFuse bank is skipped. Use '%s allow_efuse_program on|off'"
 			" command to enable|disable programming of efuse bank", dev_type);
 		return ERROR_OK;
@@ -1097,7 +1091,7 @@ int efuse_read_bank(struct flash_bank *bank, uint8_t *buffer,
 		byte_addr = (uint8_t)(cur_addr / 8);
 
 		hr = efuse_read_byte(bank, byte_addr, &efuse);
-		if (hr != ERROR_OK)
+		if (hr != ERROR_OK && hr != ERROR_FLASH_PROTECTED)
 			goto exit;
 
 		size_t skip_bits_start = (uint8_t)(cur_addr - start_byte_addr);
@@ -1111,6 +1105,9 @@ int efuse_read_bank(struct flash_bank *bank, uint8_t *buffer,
 			bit_addr < skip_bits_start + num_bits_to_read; bit_addr++) {
 			if (efuse & (1 << bit_addr))
 				buffer[bit_counter] = 1;
+
+			if (hr == ERROR_FLASH_PROTECTED)
+				buffer[bit_counter] = 0xFF;
 
 			bit_counter++;
 		}
@@ -1126,12 +1123,16 @@ int efuse_read_bank(struct flash_bank *bank, uint8_t *buffer,
 
 		byte_addr = (uint8_t)(cur_addr / 8);
 		hr = efuse_read_byte(bank, byte_addr, &efuse);
-		if (hr != ERROR_OK)
+		if (hr != ERROR_OK && hr != ERROR_FLASH_PROTECTED)
 			goto exit;
 		bit_counter = 0;
 		for (uint8_t bit_addr = 0; bit_addr < num_bits_to_read; bit_addr++) {
 			if (efuse & (1 << bit_addr))
 				buffer[cur_addr + bit_counter - offset] = 1;
+
+			if (hr == ERROR_FLASH_PROTECTED)
+				buffer[cur_addr + bit_counter - offset] = 0xFF;
+
 			bit_counter++;
 		}
 		cur_addr += num_bits_to_read;
@@ -1253,6 +1254,7 @@ FLASH_BANK_COMMAND_HANDLER(traveo2_flash_bank_command)
 	info->regs = &traveo2_regs;
 	info->size_override = bank->size;
 	info->efuse_regions = &efuse_regions_tv2;
+	info->prepare_function = traveo2_prepare;
 	bank->driver_priv = info;
 
 	return ERROR_OK;
@@ -1274,6 +1276,7 @@ FLASH_BANK_COMMAND_HANDLER(traveo2_8m_flash_bank_command)
 	info->regs = &traveo2_8m_regs;
 	info->size_override = bank->size;
 	info->efuse_regions = &efuse_regions_tv2;
+	info->prepare_function = traveo2_prepare;
 	bank->driver_priv = info;
 
 	return ERROR_OK;
@@ -1363,6 +1366,17 @@ static const struct command_registration efuse_tv2_command_handlers[] = {
 	COMMAND_REGISTRATION_DONE
 };
 
+static const struct command_registration efuse_cat1c_command_handlers[] = {
+	{
+		.name = "cat1c",
+		.mode = COMMAND_ANY,
+		.help = "cat1c flash command group",
+		.usage = "",
+		.chain = efuse_exec_command_handlers,
+	},
+	COMMAND_REGISTRATION_DONE
+};
+
 static const struct command_registration efuse_macaw_command_handlers[] = {
 	{
 		.name = "macaw",
@@ -1441,6 +1455,22 @@ struct flash_driver traveo21_efuse = {
 struct flash_driver traveo22_efuse = {
 	.name = "traveo22_efuse",
 	.commands = efuse_tv2_command_handlers,
+	.flash_bank_command = traveo2_8m_flash_bank_command,
+	.erase = efuse_erase,
+	.protect = mxs40_protect,
+	.write = efuse_program_bank,
+	.read = efuse_read_bank,
+	.probe = efuse_probe,
+	.auto_probe = mxs40_auto_probe,
+	.erase_check = default_flash_blank_check,
+	.protect_check = mxs40_protect_check,
+	.info = mxs40_get_info,
+	.free_driver_priv = default_flash_free_driver_priv,
+};
+
+struct flash_driver cat1c_efuse = {
+	.name = "cat1c_efuse",
+	.commands = efuse_cat1c_command_handlers,
 	.flash_bank_command = traveo2_8m_flash_bank_command,
 	.erase = efuse_erase,
 	.protect = mxs40_protect,

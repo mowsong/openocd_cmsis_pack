@@ -15,3 +15,6 @@ effectively converting them to no-op. Currently the following definition is used
 ```c
 #define CY_ASSERT(x)   if(!(x)) while(1u);
 ```
+## Diff / patch process
+diff -ruN SDL_orig/ sdl/ > sdl_cumulative.patch
+patch --binary -p0 < sdl_cumulative.patch

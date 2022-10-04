@@ -326,8 +326,6 @@ static int armv7a_read_mpidr(struct target *target)
 done:
 	dpm->finish(dpm);
 	return retval;
-
-
 }
 
 static int get_cache_info(struct arm_dpm *dpm, int cl, int ct, uint32_t *cache_reg)

@@ -33,27 +33,27 @@ set MemoryStart $CHIP_RAM_START
 ###############################################################################
 
 # This must match data_config_area_t
-set entry_address_loc  [expr $MemoryStart + 0x00 ]
-set stack_address_loc  [expr $MemoryStart + 0x04 ]
-set buffer_size_loc    [expr $MemoryStart + 0x08 ]
+set entry_address_loc  [expr {$MemoryStart + 0x00} ]
+set stack_address_loc  [expr {$MemoryStart + 0x04} ]
+set buffer_size_loc    [expr {$MemoryStart + 0x08} ]
 
 # This must match data_transfer_area_t
-set data_size_loc      [expr $MemoryStart + 0x0C ]
-set dest_address_loc   [expr $MemoryStart + 0x10 ]
-set command_loc        [expr $MemoryStart + 0x14 ]
-set result_loc         [expr $MemoryStart + 0x18 ]
-set data_loc           [expr $MemoryStart + 0x1C ]
+set data_size_loc      [expr {$MemoryStart + 0x0C} ]
+set dest_address_loc   [expr {$MemoryStart + 0x10} ]
+set command_loc        [expr {$MemoryStart + 0x14} ]
+set result_loc         [expr {$MemoryStart + 0x18} ]
+set data_loc           [expr {$MemoryStart + 0x1C} ]
 
 
 # These must match the MFG_SPI_FLASH_COMMAND defines
-set COMMAND_INITIAL_VERIFY            (0x01)
-set COMMAND_ERASE                     (0x02)
-set COMMAND_WRITE                     (0x04)
-set COMMAND_POST_WRITE_VERIFY         (0x08)
-set COMMAND_VERIFY_CHIP_ERASURE       (0x10)
-set COMMAND_WRITE_DCT                 (0x20)
-set COMMAND_READ                      (0x40)
-set COMMAND_WRITE_ERASE_IF_NEEDED     (0x80)
+set COMMAND_INITIAL_VERIFY            0x01
+set COMMAND_ERASE                     0x02
+set COMMAND_WRITE                     0x04
+set COMMAND_POST_WRITE_VERIFY         0x08
+set COMMAND_VERIFY_CHIP_ERASURE       0x10
+set COMMAND_WRITE_DCT                 0x20
+set COMMAND_READ                      0x40
+set COMMAND_WRITE_ERASE_IF_NEEDED     0x80
 
 # These must match the mfg_spi_flash_result_t enum
 set RESULT(0xffffffff)      "In Progress"
@@ -81,11 +81,11 @@ proc memread32 {address resume_required} {
 	if { $resume_required == 1 } {
 		halt
 	}
-	mem2array memar 32 $address 1
+	set mem [format %d [read_memory $address 32 1]]
 	if { $resume_required == 1} {
 		resume
 	}
-	return $memar(0)
+	return $mem
 }
 
 ###############################################################################
@@ -102,7 +102,7 @@ proc load_image_bin {fname foffset address length } {
   # Load data from fname filename at foffset offset to
   # target at address. Load at most length bytes.
   puts "loadimage address $address foffset $foffset $length"
-  load_image $fname [expr $address - $foffset] bin $address $length
+  load_image $fname [expr {$address - $foffset}] bin $address $length
 }
 
 
@@ -244,8 +244,8 @@ proc sflash_write_file { filename destAddress PlatBusDebug erasechip init4390 } 
 	sflash_init $PlatBusDebug $init4390
 
 	set binDataSize [file size $filename]
-	# set erase_command_val [expr $COMMAND_ERASE ]
-	set write_command_val [expr $COMMAND_WRITE_ERASE_IF_NEEDED | $COMMAND_POST_WRITE_VERIFY ]
+
+	set write_command_val [expr {$COMMAND_WRITE_ERASE_IF_NEEDED | $COMMAND_POST_WRITE_VERIFY} ]
 	set pos 0
 
 	# if { $erasechip } {
@@ -258,13 +258,13 @@ proc sflash_write_file { filename destAddress PlatBusDebug erasechip init4390 } 
 		puts "Total write size is $binDataSize."
 		while { $pos < $binDataSize } {
 			if { ($binDataSize - $pos) <  $buffer_size } {
-				set writesize [expr ($binDataSize - $pos)]
+				set writesize [expr {$binDataSize - $pos}]
 			} else {
 				set writesize $buffer_size
 			}
-			puts "writing $writesize bytes at [expr $destAddress + $pos]"
-			program_sflash $filename $pos $writesize [expr $destAddress + $pos] $write_command_val
-			set pos [expr $pos + $writesize]
+			puts "writing $writesize bytes at [expr {$destAddress + $pos}]"
+			program_sflash $filename $pos $writesize [expr {$destAddress + $pos}] $write_command_val
+			set pos [expr {$pos + $writesize}]
 		}
 	} else {
 		puts "The file size was too big ($binDataSize), will split it into small size before write to sflash."
@@ -278,7 +278,7 @@ proc sflash_write_file { filename destAddress PlatBusDebug erasechip init4390 } 
 
 		while { $fd_pos < $fd_binDataSize } {
 			if { ($fd_binDataSize - $fd_pos) <  $MAX_SINGLE_FILE_SIZE } {
-				set fd_writesize [expr ($fd_binDataSize - $fd_pos)]
+				set fd_writesize [expr {$fd_binDataSize - $fd_pos}]
 			} else {
 				set fd_writesize $MAX_SINGLE_FILE_SIZE
 			}
@@ -295,20 +295,20 @@ proc sflash_write_file { filename destAddress PlatBusDebug erasechip init4390 } 
 			set pos 0
 			while { $pos < $fd_writesize } {
 				if { ($fd_writesize - $pos) <  $buffer_size } {
-					set writesize [expr ($fd_writesize - $pos)]
+					set writesize [expr {$fd_writesize - $pos}]
 				} else {
 					set writesize $buffer_size
 				}
-				puts "writing $writesize bytes at [expr $destAddress + $pos]"
-				program_sflash $tmpfilename $pos $writesize [expr $destAddress + $pos] $write_command_val
-				set pos [expr $pos + $writesize]
+				puts "writing $writesize bytes at [expr {$destAddress + $pos}]"
+				program_sflash $tmpfilename $pos $writesize [expr {$destAddress + $pos}] $write_command_val
+				set pos [expr {$pos + $writesize}]
 			}
 
 			file delete $tmpfilename
-			set destAddress [ expr $destAddress + $fd_writesize ]
-			set fd_pos [expr $fd_pos + $fd_writesize]
+			set destAddress [ expr {$destAddress + $fd_writesize} ]
+			set fd_pos [expr {$fd_pos + $fd_writesize}]
 			seek $fd $fd_pos
-			set tmpfilename_count [expr $tmpfilename_count + 1]
+			set tmpfilename_count [expr {$tmpfilename_count + 1}]
 	   }
 	   close $fd
 	}
@@ -345,18 +345,18 @@ proc sflash_read_file { filename srcAddress PlatBusDebug length init4390 } {
 	set fd_out [open $filename "wb"]
 	fconfigure $fd_out -translation binary
 
-	set read_command_val [expr $COMMAND_READ ]
+	set read_command_val [expr {$COMMAND_READ} ]
 	set pos 0
 
 	while { $pos < $length } {
 		if { ($length - $pos) <  $buffer_size } {
-			set readsize [expr ($length - $pos)]
+			set readsize [expr {$length - $pos}]
 		} else {
 			set readsize $buffer_size
 		}
 
-		puts "reading $readsize bytes from [expr $srcAddress + $pos]"
-		program_sflash "" $pos $readsize [expr $srcAddress + $pos] $read_command_val
+		puts "reading $readsize bytes from [expr {$srcAddress + $pos}]"
+		program_sflash "" $pos $readsize [expr {$srcAddress + $pos}] $read_command_val
 		halt
 		dump_image  $temp_file $data_loc $readsize
 
@@ -379,11 +379,11 @@ proc sflash_read_file { filename srcAddress PlatBusDebug length init4390 } {
 		# get current positioin of output for reporting
 		seek $fd_out 0 end
 		set new_pos [ tell $fd_out ]
-		set written_amount [expr $new_pos - $curr_pos]
+		set written_amount [expr {$new_pos - $curr_pos}]
 		puts " wrote $written_amount from $curr_pos to $new_pos"
 
 		#update the SFLASH read position
-		set pos [expr $pos + $readsize]
+		set pos [expr {$pos + $readsize}]
 	}
 	close $fd_out
 
@@ -396,11 +396,11 @@ proc sflash_erase { PlatBusDebug init4390 } {
 
 	sflash_init $PlatBusDebug $init4390
 
-	set erase_command_val [expr $COMMAND_ERASE ]
+	set erase_command_val [expr {$COMMAND_ERASE} ]
 
 	puts "Erasing Chip"
 	set start_milliseconds [clock milliseconds]
 	program_sflash "" 0 0 0 $erase_command_val
 	set end_milliseconds [clock milliseconds]
-	puts [format "Chip Erase Done (in %d ms)" [expr $end_milliseconds - $start_milliseconds]]
+	puts [format "Chip Erase Done (in %d ms)" [expr {$end_milliseconds - $start_milliseconds}]]
 }

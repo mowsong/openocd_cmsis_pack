@@ -1,7 +1,7 @@
 #include <string.h>
 
 #include "progress.h"
-#include "log.h"
+#include "helper/log.h"
 
 #define MAX_BAR_WIDTH   32
 static char sbuf[MAX_BAR_WIDTH + 1];

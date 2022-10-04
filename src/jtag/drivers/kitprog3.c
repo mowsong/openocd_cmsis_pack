@@ -33,7 +33,9 @@
 #include <jtag/drivers/cmsis_dap.h>
 #include <helper/time_support.h>
 
+#define KP3_TARGET_VOLTAGE_MAX_ERROR      100
 #define KP3_TARGET_VOLTAGE_MAX_ERROR_PC   5
+
 #define KP3_USB_TIMEOUT                   1000u
 #define KP3_REQUEST_VERSION               0x80
 #define KP3_REQUEST_ACQUIRE               0x85
@@ -71,7 +73,6 @@ struct acquire_config {
 
 struct power_config {
 	bool configured;
-	bool enabled;
 	uint16_t voltage;
 };
 
@@ -213,57 +214,53 @@ static int kitprog3_power_control(void)
 	struct cmsis_dap *dap = cmsis_dap_handle;
 	dap->command[0] = KP3_REQUEST_POWER;
 	dap->command[1] = KP3_REQUEST_POWER_SET;
-	if (power_config.enabled) {
-		if (power_config.voltage == UINT16_MAX) {
-			LOG_INFO("kitprog3: powering up target device using KitProg3 (default voltage)");
-			dap->command[2] = 0x01;
-			dap->command[3] = 0;
-			dap->command[4] = 0;
-		} else {
-			LOG_INFO("kitprog3: powering up target device using KitProg3 (VTarg = %d mV)",
-				power_config.voltage);
-			dap->command[2] = power_config.voltage ? 0x02 : 0x00;
-			dap->command[3] = power_config.voltage & 0xFF;
-			dap->command[4] = power_config.voltage >> 8;
-		}
-	} else {
+	if (power_config.voltage == 0) {
 		LOG_INFO("kitprog3: powering down target device using KitProg3");
 		dap->command[2] = 0x00;
 		dap->command[3] = 0x00;
 		dap->command[4] = 0x00;
+	} else if (power_config.voltage == UINT16_MAX) {
+		LOG_INFO("kitprog3: powering up target device using KitProg3 (default voltage)");
+		dap->command[2] = 0x01;
+		dap->command[3] = 0;
+		dap->command[4] = 0;
+	} else {
+		LOG_INFO("kitprog3: powering up target device using KitProg3 (VTarg = %d mV)", power_config.voltage);
+		dap->command[2] = power_config.voltage ? 0x02 : 0x00;
+		dap->command[3] = power_config.voltage & 0xFF;
+		dap->command[4] = power_config.voltage >> 8;
 	}
 
 	int hr = kitprog3_usb_request(KP3_USB_TIMEOUT, true);
 	if (hr != ERROR_OK)
 		LOG_ERROR("kitprog3: power_control command failed (target already powered?)");
 
-	if (power_config.enabled) {
-		/* Get current voltage, used for dropout detection */
+	/* We do not know what the default voltage is,
+	 * just sleep for a while to allow voltage to settle */
+	if (power_config.voltage == UINT16_MAX) {
+		alive_sleep(250);
+		return kitprog3_get_power(&initial_voltage);
+	}
+
+	/* Wait up to KP3_USB_TIMEOUT for target voltage to stabilise */
+	int64_t start = timeval_ms();
+	uint16_t prev_voltage = UINT16_MAX;
+	while(timeval_ms() - start <= KP3_USB_TIMEOUT) {
 		hr = kitprog3_get_power(&initial_voltage);
 		if(hr != ERROR_OK)
 			return hr;
 
-		/* Wait up to KP3_USB_TIMEOUT for target voltage to stabilise */
-		int64_t start = timeval_ms();
-		while(timeval_ms() - start <= KP3_USB_TIMEOUT) {
-			uint16_t mv_now;
-			hr = kitprog3_get_power(&mv_now);
-			if(hr != ERROR_OK)
-				return hr;
+		if(abs(initial_voltage - prev_voltage) <= KP3_TARGET_VOLTAGE_MAX_ERROR)
+			break;
 
-			const int max_error  = KP3_TARGET_VOLTAGE_MAX_ERROR_PC * mv_now / 100;
-			if(abs(initial_voltage - mv_now) <= max_error)
-				break;
-
-			initial_voltage = mv_now;
-		}
-
-		if(timeval_ms() - start > KP3_USB_TIMEOUT)
-			LOG_WARNING("Target voltage (%u.%03u V) is not stable within %d%%",
-						initial_voltage / 1000, initial_voltage % 1000,
-						KP3_TARGET_VOLTAGE_MAX_ERROR_PC);
+		prev_voltage = initial_voltage;
+		alive_sleep(50);
 	}
 
+	if(timeval_ms() - start > KP3_USB_TIMEOUT)
+		LOG_WARNING("Target voltage (%u.%03u V) is not within %d mV of requested",
+					initial_voltage / 1000, initial_voltage % 1000,
+					KP3_TARGET_VOLTAGE_MAX_ERROR);
 	return hr;
 }
 
@@ -371,11 +368,14 @@ static int kitprog3_check_version(void)
 
 	LOG_INFO("KitProg3: FW version: %zu.%zu.%zu", g_kp3_ver.major, g_kp3_ver.minor, g_kp3_ver.build);
 
+#if BUILD_CMSIS_DAP_HID == 1
 	/* The rest of the code is related to BULK backends only*/
 	const bool is_hid_backend = strcmp("hid", cmsis_dap_handle->backend->name) == 0;
 	if (is_hid_backend)
 		return ERROR_OK;
+#endif
 
+#if BUILD_CMSIS_DAP_USB == 1
 	/* Workaround for KP3 FW < 1.20.591 in BULK mode */
 	if(kitprog3_compare_versions(&g_kp3_ver, &(struct kp3_version){NULL, 1, 20, 591}) < 0) {
 		cmsis_dap_handle->packet_count = 1;
@@ -384,7 +384,6 @@ static int kitprog3_check_version(void)
 		LOG_INFO("KitProg3: Pipelined transfers enabled");
 	}
 
-#if (0)
 	/* Workaround for KP3 FW < 2.30.1081 - hangs with asynchronous BULK backend */
 	if(kitprog3_compare_versions(&g_kp3_ver, &(struct kp3_version){NULL, 2, 30, 1081}) < 0) {
 		cmsis_dap_handle->backend = &cmsis_dap_usb_backend;
@@ -393,8 +392,6 @@ static int kitprog3_check_version(void)
 		cmsis_dap_handle->backend = &cmsis_dap_usb_backend_async;
 		LOG_INFO("KitProg3: Asynchronous USB transfers enabled");
 	}
-#else
-	cmsis_dap_handle->backend = &cmsis_dap_usb_backend;
 #endif
 
 	return ERROR_OK;
@@ -471,10 +468,9 @@ static int kitprog3_init(void)
 			return hr;
 	}
 
-	uint16_t voltage = 0;
-	hr = kitprog3_get_power(&voltage);
+	hr = kitprog3_get_power(&initial_voltage);
 	if (hr == ERROR_OK)
-		LOG_INFO("VTarget = %u.%03u V", voltage / 1000, voltage % 1000);
+		LOG_INFO("VTarget = %u.%03u V", initial_voltage / 1000, initial_voltage % 1000);
 
 	if (acquire_config.configured && acquire_config.enabled)
 		kitprog3_acquire_psoc();
@@ -554,10 +550,20 @@ COMMAND_HANDLER(cmsis_dap_handle_power_config_command)
 		COMMAND_PARSE_NUMBER(u16, CMD_ARGV[1], voltage);
 
 	power_config.configured = true;
-	power_config.enabled = enabled;
-	power_config.voltage = voltage;
+	power_config.voltage = enabled ? voltage : 0;
 
-	return ERROR_OK;
+	switch (CMD_CTX->mode) {
+	case COMMAND_EXEC:
+		return kitprog3_power_control();
+	default:
+		return ERROR_OK;
+	}
+}
+
+COMMAND_HANDLER(cmsis_dap_handle_power_control_command)
+{
+	LOG_USER("DEPRECATED! use 'kitprog3 power_config' not 'kitprog3 power_control'");
+	return CALL_COMMAND_HANDLER(cmsis_dap_handle_power_config_command);
 }
 
 /**************************************************************************************************
@@ -569,18 +575,6 @@ COMMAND_HANDLER(cmsis_dap_handle_acquire_psoc_command)
 		return ERROR_COMMAND_ARGUMENT_INVALID;
 
 	return kitprog3_acquire_psoc();
-}
-
-COMMAND_HANDLER(cmsis_dap_handle_power_control_command)
-{
-	if (CMD_ARGC != 1)
-		return ERROR_COMMAND_ARGUMENT_INVALID;
-
-	bool enabled = false;
-	COMMAND_PARSE_ON_OFF(CMD_ARGV[0], enabled);
-	power_config.enabled = enabled;
-
-	return kitprog3_power_control();
 }
 
 COMMAND_HANDLER(cmsis_dap_handle_get_power_command)
@@ -681,15 +675,15 @@ static const struct command_registration kitprog3_subcommand_handlers[] = {
 	{
 		.name = "power_config",
 		.handler = &cmsis_dap_handle_power_config_command,
-		.mode = COMMAND_CONFIG,
+		.mode = COMMAND_ANY,
 		.usage = "<enabled on|off> [voltage (mV)]",
 		.help = "Controls the target's power supply during init phase",
 	},
 	{
 		.name = "power_control",
 		.handler = &cmsis_dap_handle_power_control_command,
-		.mode = COMMAND_EXEC,
-		.usage = "[on|off]",
+		.mode = COMMAND_ANY,
+		.usage = "[on|off] <enabled on|off> [voltage (mV)]",
 		.help = "Controls the target's power supply",
 	},
 	{

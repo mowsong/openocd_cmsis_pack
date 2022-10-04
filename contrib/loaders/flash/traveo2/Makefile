@@ -2,12 +2,8 @@ ifeq (x$(TARGET),x)
 $(error TARGET variable not defined!)
 endif
 
-CPU_FLAGS   := -mthumb -mcpu=cortex-m0plus -msoft-float
+CPU_FLAGS   := -mthumb -mcpu=cortex-m0 -msoft-float
 include $(TARGET)/options.mk
-
-CC_SRC := \
-	$(TARGET)/FlashPrg.c \
-	$(TARGET)/FlashDev.c
 	
 AS_SRC    :=
 
@@ -39,13 +35,13 @@ GLOBAL_DEFS += -DNDEBUG -DLOADER_TARGET=\"$(TARGET)\"
 # Warning options
 ##############################################################################################################################
 CC_WARN := -Wall -Wextra -Wno-unused-variable -Wno-unused-function -Wno-unused-but-set-variable -Wno-return-type -Wno-maybe-uninitialized \
-			-Wno-comment -Wno-unused-parameter -Wno-expansion-to-defined -Wno-sign-compare -Wno-absolute-value
+			-Wno-comment -Wno-unused-parameter -Wno-expansion-to-defined -Wno-sign-compare -Wno-absolute-value -Wno-cpp
 
 ##############################################################################################################################
 # Code generation options
 ##############################################################################################################################
 CC_CODEGEN := -ffunction-sections -fdata-sections -fsingle-precision-constant -ffast-math -fmerge-all-constants \
-			   -fstrict-overflow -fno-math-errno -fvisibility=hidden -frename-registers -fpeel-loops -fsection-anchors -ffreestanding
+			   -fstrict-overflow -fno-math-errno -frename-registers -ffreestanding
 
 ##############################################################################################################################
 # Complete command lines
@@ -53,7 +49,7 @@ CC_CODEGEN := -ffunction-sections -fdata-sections -fsingle-precision-constant -f
 CFLAGS      := -std=c11   $(CC_WARN)  $(CC_CODEGEN)  $(CPU_FLAGS) $(OPTFLAGS) $(INCLPATHS) $(GLOBAL_DEFS) \
 			-fpic -mapcs-frame -fwhole-program -static
 			
-LDFLAGS     := $(CPU_FLAGS) $(OPTFLAGS) $(GLOBAL_DEFS) -T$(LDSCRIPT) -Wl,--gc-sections,--warn-common,--nmagic,-static \
+LDFLAGS     := $(CPU_FLAGS) $(OPTFLAGS) $(GLOBAL_DEFS) -T$(LDSCRIPT) -Wl,--gc-sections,--nmagic,-static \
 			--specs=nano.specs --specs=nosys.specs
 
 ##############################################################################################################################
@@ -62,36 +58,33 @@ LDFLAGS     := $(CPU_FLAGS) $(OPTFLAGS) $(GLOBAL_DEFS) -T$(LDSCRIPT) -Wl,--gc-se
 .PHONY: all clean
 
 all: $(OUT_DIR)/$(TARGET).elf
-ifeq ($(VERBOSE_BUILD), 1)
-	@echo
-	@echo ------------------ Functions ------------------
-	@$(READELF) -s $(OUT_DIR)/$(TARGET).elf | grep FUNC | sort -k 3,3 -r -n | head -n 5 | awk '{printf " %-36.36s %-8.8s\n", $$8, $$3}'
-	@echo ------------------ Variables ------------------
-	@$(READELF) -s $(OUT_DIR)/$(TARGET).elf | grep OBJECT | sort -k 3,3 -r -n | head -n 5 | awk '{printf " %-36.36s %s\n", $$8, $$3}'
-	@echo -----------------------------------------------
-endif
 	@$(SIZE) $(OUT_DIR)/$(TARGET).elf | tail -n 1 | awk '{printf "\nFlash: %8.8s\nRAM:   %8.8s\n\n", $$1+$$2, $$2+$$3}'
 	@$(OBJDUMP) -DlS $(OUT_DIR)/$(TARGET).elf > $(OUT_DIR)/$(TARGET).s
 	@mv $(OUT_DIR)/$(TARGET).elf ../../../../flm/cypress/traveo2/
 	
-	@echo "/* Auto-generated with a makefile */\n" > Traveo2_FlashLoaders.config;
+	@touch $(TARGET).creator
+	
+	@echo "/* Auto-generated with a makefile */\n" > $(TARGET).config;
 	@for DEFINE in $(GLOBAL_DEFS); do \
-		echo $$DEFINE | sed "s/-D/#define /;s/=/ /" >> Traveo2_FlashLoaders.config; \
+		echo $$DEFINE | sed "s/-D/#define /;s/=/ /" >> $(TARGET).config; \
 	done
-	@echo "/* Auto-generated with a makefile */\n" > Traveo2_FlashLoaders.includes
+	@echo "/* Auto-generated with a makefile */\n" > $(TARGET).includes
 	@for INCLUDE in $(INCLPATHS); do \
-		echo $$INCLUDE | sed "s/-I//g" >> Traveo2_FlashLoaders.includes; \
+		echo $$INCLUDE | sed "s/-I//g" >> $(TARGET).includes; \
 	done
-	@cat $(DEPFILES) | grep -oP '^ (.*)' | sed 's/ /\n/g;s/\\//g' | sort -u > Traveo2_FlashLoaders.files
-	@find $(TARGET)/ -regex '.*\.\(mk\|ld\)' >> Traveo2_FlashLoaders.files
-	@echo "Makefile" >> Traveo2_FlashLoaders.files
-	@echo "README.md" >> Traveo2_FlashLoaders.files
+	@cat $(DEPFILES) | grep -oP '^ (.*)' | sed 's/ /\n/g;s/\\//g' | sort -u > $(TARGET).files
+	@find $(TARGET)/ -regex '.*\.\(mk\|ld\|c\|h\)' >> $(TARGET).files
+	@echo "Makefile" >> $(TARGET).files
+	@echo "README.md" >> $(TARGET).files
 	@find -L  -type f -name "*.[od]" -delete
 
 clean:
 	@echo Cleaning up...
 	@find -L  -type f -name "*.[od]" -delete
 	@rm -rf $(OUT_DIR)/*
+	@echo > $(TARGET).files
+	@echo > $(TARGET).includes
+	@echo > $(TARGET).config
 
 $(OUT_DIR)/$(TARGET).elf:$(OBJ)
 	@echo [$(TARGET): ld ] $(TARGET).elf
@@ -102,9 +95,5 @@ $(OUT_DIR)/$(TARGET).elf:$(OBJ)
 %.o:%.c
 	@echo [$(TARGET): gcc] `basename $*.c`
 	@$(CC) $(CFLAGS) -MMD -c $*.c -o $*.o
-
-%.o:%.s
-	@echo [$(TARGET): as ] `basename $*.s`
-	@$(AS) $(CFLAGS) -MMD -c $*.s -o $*.o
 
 -include $(DEPFILES)

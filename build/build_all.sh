@@ -17,13 +17,16 @@ STATIC="${STATIC:-0}"
 OPENOCD_BRANCH="${OPENOCD_BRANCH:-develop}"
 PKG_LVERSION="${PKG_LVERSION:-${OPENOCD_BRANCH}-latest}"
 LIBUSB_BRANCH=master
-LIBUSB_COMMIT=96898a25ccfde6e87737991000a41695ed6b3812
+LIBUSB_COMMIT=HEAD
 HIDAPI_BRANCH=master
-HIDAPI_COMMIT=ad27b4617007cf2d824482e79193dc9557afeb1c
+HIDAPI_COMMIT=HEAD
+CAPSTONE_BRANCH=master
+CAPSTONE_COMMIT=tags/4.0.2
 
 ################################################################################
 HIDAPI_REPO="https://github.com/libusb/hidapi.git"
 LIBUSB_REPO="https://github.com/libusb/libusb.git"
+CAPSTONE_REPO="https://github.com/aquynh/capstone.git"
 SOURCE_PREFIX="$(pwd)/build/_src"
 BUILD_PREFIX="$(pwd)/build/_libs"
 INSTALL_PREFIX="$(pwd)/install"
@@ -124,6 +127,10 @@ if [ -z "$libusb_exists" ]; then
     maybe_build_library "libusb" "${LIBUSB_BUILD_TYPE}"
 fi
 
+maybe_fetch_package "capstone" "${CAPSTONE_REPO}" "${CAPSTONE_BRANCH}" "${CAPSTONE_COMMIT}"
+cd "${SOURCE_PREFIX}/capstone"
+make CAPSTONE_ARCHS="arm" CAPSTONE_BUILD_CORE_ONLY=yes CAPSTONE_SHARED=no PREFIX=${BUILD_PREFIX} install
+
 # fetch openocd
 maybe_fetch_package "openocd" "${OPENOCD_REPO}" "${OPENOCD_BRANCH}"
 
@@ -156,7 +163,7 @@ cp -av "${SOURCE_PREFIX}/openocd/build"/*.sh "${INSTALL_PREFIX}/openocd/source/"
 
 mkdir -p "${INSTALL_PREFIX}/openocd/docs"
 cp -av "${SOURCE_PREFIX}/openocd/doc/third_party_licenses" "${INSTALL_PREFIX}/openocd/docs/"
-cp -av "${SOURCE_PREFIX}/openocd/doc"/*.pdf "${INSTALL_PREFIX}/openocd/docs/"
+cp -av "${SOURCE_PREFIX}/openocd/doc"/*.pdf "${INSTALL_PREFIX}/openocd/docs/" || true
 
 rm -rf "${CONTRIB_PREFIX}"
 
@@ -169,8 +176,9 @@ case "$OSTYPE" in
         ;;
     msys*)
         if [ ${STATIC} -eq 0 ]; then
-#			cp /mingw64/bin/libwinpthread-1.dll ${BIN_PREFIX}/
-            cp -a "/c/msys64/mingw32/bin/libwinpthread-1.dll" "${BIN_PREFIX}/"
+#          cp /mingw64/bin/libwinpthread-1.dll ${BIN_PREFIX}/
+#          cp -a "/c/msys64/mingw32/bin/libgcc_s_dw2-1.dll" "${BIN_PREFIX}/"
+#          cp -a "/c/msys64/mingw32/bin/libwinpthread-1.dll" "${BIN_PREFIX}/"
             cp -a "${BUILD_PREFIX}/bin/libusb-1.0.dll" "${BIN_PREFIX}/"
             strip "${BIN_PREFIX}"/*.dll
         fi

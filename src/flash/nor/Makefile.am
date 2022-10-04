@@ -32,6 +32,7 @@ NOR_DRIVERS = \
 	%D%/cfi.c \
 	%D%/cmspi.c \
 	%D%/dsp5680xx_flash.c \
+	%D%/dummy_flash.c \
 	%D%/efm32.c \
 	%D%/em357.c \
 	%D%/esirisc_flash.c \
@@ -58,7 +59,6 @@ NOR_DRIVERS = \
 	%D%/ocl.c \
 	%D%/pic32mx.c \
 	%D%/psoc4.c \
-	%D%/psoc4hv.c \
 	%D%/psoc5lp.c \
 	%D%/sfdp.c \
 	%D%/renesas_rpchf.c \

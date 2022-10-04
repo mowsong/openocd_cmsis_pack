@@ -42,6 +42,7 @@ static void virtual_update_bank_info(struct flash_bank *bank)
 	bank->sectors = master_bank->sectors;
 	bank->num_prot_blocks = master_bank->num_prot_blocks;
 	bank->prot_blocks = master_bank->prot_blocks;
+	bank->is_memory_mapped = master_bank->is_memory_mapped;
 }
 
 FLASH_BANK_COMMAND_HANDLER(virtual_flash_bank_command)

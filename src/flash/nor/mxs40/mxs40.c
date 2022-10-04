@@ -25,15 +25,16 @@
 #include "flash/nor/mxs40/mxs40.h"
 
 #include "flash/nor/imp.h"
-#include "target/target.h"
-#include "target/cortex_m.h"
-#include "target/breakpoints.h"
-#include "time_support.h"
-#include "target/algorithm.h"
-#include "target/image.h"
 #include "flash/progress.h"
-#include "target/register.h"
+#include "helper/time_support.h"
 #include "rtos/rtos.h"
+#include "target/algorithm.h"
+#include "target/arm_adi_v5.h"
+#include "target/breakpoints.h"
+#include "target/cortex_m.h"
+#include "target/image.h"
+#include "target/register.h"
+#include "target/target.h"
 
 static struct working_area *g_stack_area;
 static struct armv7m_algorithm g_armv7m_info;
@@ -935,16 +936,16 @@ int mxs40_program_row_inner(struct flash_bank *bank, uint32_t addr, const uint8_
     bool use_writerow, uint8_t data_size)
 {
 	struct target *target = bank->target;
-	struct mxs40_bank_info *info = bank->driver_priv;
 	struct working_area *wa;
 	const uint32_t sromapi_req = use_writerow ? SROMAPI_WRITEROW_REQ : SROMAPI_PROGRAMROW_REQ;
+	const size_t num_bytes = (1u << data_size);
 	uint32_t data_out;
 	int hr;
 
 	LOG_DEBUG("MXS40 patform: programming row @%08X", addr);
 	uint8_t srom_params[4 * sizeof(uint32_t)];
 
-	hr = target_alloc_working_area(target, sizeof(srom_params) + info->page_size, &wa);
+	hr = target_alloc_working_area(target, sizeof(srom_params) + num_bytes, &wa);
 	if (hr != ERROR_OK)
 		goto exit;
 
@@ -957,7 +958,7 @@ int mxs40_program_row_inner(struct flash_bank *bank, uint32_t addr, const uint8_
 	if (hr != ERROR_OK)
 		goto exit_free_wa;
 
-	hr = target_write_buffer(target, wa->address + 0x10, info->page_size, buffer);
+	hr = target_write_buffer(target, wa->address + 0x10, num_bytes, buffer);
 	if (hr != ERROR_OK)
 		goto exit_free_wa;
 
@@ -1151,10 +1152,6 @@ static bool mxs40_is_address_bootable(uint32_t variant, target_addr_t addr)
 {
 	switch (variant) {
 	case MXS40_VARIANT_PSOC6_BLE2:
-		return  (addr >= 0x10000000 && addr < 0x10100000) || /* Main Flash, 1 MiB max */
-				(addr >= 0x08000000 && addr < 0x08048000) || /* RAM, 288 KiB max */
-				(addr >= 0x18000000 && addr < 0x20000000);   /* XIP, 128 MiB max */
-
 	case MXS40_VARIANT_PSOC6A_2M:
 		return  (addr >= 0x10000000 && addr < 0x10200000) || /* Main Flash, 2 MiB max */
 				(addr >= 0x08000000 && addr < 0x08100000) || /* RAM, 1 MiB max */
@@ -1194,30 +1191,6 @@ static bool mxs40_is_address_bootable(uint32_t variant, target_addr_t addr)
  *************************************************************************************************/
 static int mxs40_reset_halt(struct target *target, enum reset_halt_mode mode)
 {
-	/* Update target state */
-	int hr = target_poll(target);
-	if(hr != ERROR_OK)
-		return hr;
-
-	/* Poll again if we came here right from Reset
-	 * or target_halt() will not skip writing C_HALT bit */
-	if(target->state == TARGET_RESET) {
-		hr = target_poll(target);
-		if(hr != ERROR_OK)
-			return hr;
-	}
-
-	/* Halt the target if it is running */
-	if(target->state == TARGET_RUNNING) {
-		hr = target_halt(target);
-		if(hr != ERROR_OK)
-			return hr;
-
-		hr = target_wait_state(target, TARGET_HALTED, IPC_TIMEOUT_MS);
-		if(hr != ERROR_OK)
-			return hr;
-	}
-
 	const struct mxs40_bank_info *info = mxs40_get_bank_info_by_target(target);
 	if (info == NULL) {
 		LOG_ERROR("Unable to locate mxs40_bank_info structure for target %s",
@@ -1225,35 +1198,60 @@ static int mxs40_reset_halt(struct target *target, enum reset_halt_mode mode)
 		return ERROR_FAIL;
 	}
 
-	/* Read Vector Offset register */
+	int hr;
+	const long timeout_ms = (target->coreid == 0) ? CM0_VTOR_TIMEOUT_MS : OTHER_VTOR_TIMEOUT_MS;
+	LOG_INFO("%s: Waiting up to %ld.%ld sec for valid Vector Table address...",
+			 target_name(target), timeout_ms / 1000u, timeout_ms % 1000u);
+
 	uint32_t vt_base;
-	hr = target_read_u32(target, info->regs->vtbase[target->coreid], &vt_base);
-	if (hr != ERROR_OK)
-		return hr;
-
-	if (!mxs40_is_address_bootable(info->regs->variant, vt_base)) {
-		LOG_INFO("Vector Table address invalid (0x%08X), reset_halt skipped ", vt_base);
-		return ERROR_OK;
-	}
-
-	/* Read Reset Vector value */
 	uint32_t reset_addr;
-	hr = target_read_u32(target, vt_base + 4, &reset_addr);
-	if (hr != ERROR_OK)
-		return hr;
+	bool vt_found = false;
+	struct timeout to;
+	struct armv7m_common *armv7m =target_to_armv7m(target);
+	mxs40_timeout_init(&to, timeout_ms);
+	while (!mxs40_timeout_expired(&to)) {
+		keep_alive();
 
-	/* Invalid value means flash is empty */
-	if (!mxs40_is_address_bootable(info->regs->variant, reset_addr)) {
-		LOG_INFO("Entry Point address invalid (0x%08X), reset_halt skipped", reset_addr);
-		return ERROR_OK;
+		/* Read Vector Table Offset register */
+		hr = mem_ap_read_atomic_u32(armv7m->debug_ap, info->regs->vtbase[target->coreid], &vt_base);
+		if (hr != ERROR_OK)
+			continue;
+
+		if ((target->coreid == 0) && (vt_base & 0xFFFF0000) == 0xFFFF0000) {
+			LOG_INFO("%s: Application is invalid (VTOR = 0x%08X), reset_halt skipped",
+					 target_name(target), vt_base);
+			goto exit_halt_cpu;
+		}
+
+		/* Vector Table Offset must point to bootable region */
+		if (!mxs40_is_address_bootable(info->regs->variant, vt_base))
+			continue;
+
+		/* Read Reset_Handler address */
+		hr = mem_ap_read_atomic_u32(armv7m->debug_ap, vt_base + 4, &reset_addr);
+		if (hr != ERROR_OK)
+			continue;
+
+		/* Read Reset_Handler must belong to bootable region */
+		if (mxs40_is_address_bootable(info->regs->variant, reset_addr)) {
+			vt_found = true;
+			break;
+		}
 	}
+
+	if (!vt_found) {
+		LOG_INFO("%s: Vector Table not found (core not started?), reset_halt skipped", target_name(target));
+		goto exit_halt_cpu;
+	}
+
+	LOG_INFO("%s: Vector Table found at 0x%08X", target_name(target), vt_base);
 
 	/* Set breakpoint at User Application entry point */
 	hr = breakpoint_add(target, reset_addr, 2, BKPT_HARD);
 	if (hr != ERROR_OK)
 		return hr;
 
-	/* MXS40 patform reboots immediatelly after issuing SYSRESETREQ / VECTRESET
+	/* MXS40 platform reboots immediately after issuing SYSRESETREQ / VECTRESET
 	 * this disables SWD/JTAG pins momentarily and may break communication
 	 * Ignoring return value of mem_ap_write_atomic_u32 seems to be ok here */
 
@@ -1270,10 +1268,8 @@ static int mxs40_reset_halt(struct target *target, enum reset_halt_mode mode)
 		rst_mask = AIRCR_VECTRESET;
 	}
 
-	const struct armv7m_common *armv7m = target_to_armv7m(target);
-
 	/* Reset the CM0 by asserting SYSRESETREQ. This will also reset CM4 */
-	LOG_INFO("%s: bkpt @0x%08X, issuing %s", target->cmd_name, reset_addr, mode_str);
+	LOG_INFO("%s: bkpt @0x%08X, issuing %s", target_name(target), reset_addr, mode_str);
 
 	/* Workaround for PT-2019, both cores enter LOCKUP state with slow JTAG clock
 	 * This happens probably because JTAG pins gets disconnected momentarily when
@@ -1302,7 +1298,6 @@ static int mxs40_reset_halt(struct target *target, enum reset_halt_mode mode)
 	register_cache_invalidate(target->reg_cache);
 
 	/* Wait for debug interface to be ready */
-	struct timeout to;
 	mxs40_timeout_init(&to, IPC_TIMEOUT_MS);
 	while(!mxs40_timeout_expired(&to)) {
 		if( dap_dp_init(armv7m->debug_ap->dap) != ERROR_OK ||
@@ -1323,6 +1318,32 @@ static int mxs40_reset_halt(struct target *target, enum reset_halt_mode mode)
 		rtos_wipe(target);
 
 	return ERROR_OK;
+
+exit_halt_cpu:
+	hr = target_poll(target);
+	if(hr != ERROR_OK)
+		return hr;
+
+	/* Poll again if we came here right from Reset
+	 * or target_halt() will not skip writing C_HALT bit */
+	if(target->state == TARGET_RESET) {
+		hr = target_poll(target);
+		if(hr != ERROR_OK)
+			return hr;
+	}
+
+	/* Halt the target if it is running */
+	if(target->state == TARGET_RUNNING) {
+		hr = target_halt(target);
+		if(hr != ERROR_OK)
+			return hr;
+
+		hr = target_wait_state(target, TARGET_HALTED, IPC_TIMEOUT_MS);
+		if(hr != ERROR_OK)
+			return hr;
+	}
+
+	return hr;
 }
 
 /** ***********************************************************************************************

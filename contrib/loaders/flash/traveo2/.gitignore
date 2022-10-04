@@ -1,3 +1,9 @@
 sdl
 out
-Traveo2_FlashLoaders*
+*.cflags
+*.config
+*.creator*
+*.files
+*.cflags
+*.cxxflags
+*.includes

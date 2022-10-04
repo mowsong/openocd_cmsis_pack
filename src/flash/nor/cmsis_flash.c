@@ -26,24 +26,23 @@
 
 #include <time.h>
 #include <stdarg.h>
-
-#include "binarybuffer.h"
-#include "target/image.h"
-#include "log.h"
-#include "target/armv7m.h"
-#include "command.h"
-#include "imp.h"
+#include "flash/progress.h"
 
 #include "flash/nor/core.h"
 #include "flash/nor/driver.h"
-#include "target/target.h"
-#include "target/cortex_m.h"
-#include "target/breakpoints.h"
-#include "target/target_type.h"
-#include "time_support.h"
+#include "helper/binarybuffer.h"
+#include "helper/command.h"
+#include "helper/log.h"
+#include "helper/time_support.h"
+#include "imp.h"
 #include "target/algorithm.h"
+#include "target/armv7m.h"
+#include "target/breakpoints.h"
+#include "target/cortex_m.h"
 #include "target/image.h"
-#include "flash/progress.h"
+#include "target/image.h"
+#include "target/target.h"
+#include "target/target_type.h"
 
 enum cmsis_operation {
 	CMSIS_OPERATION_INVALID = 0,
@@ -367,9 +366,11 @@ cleanup:
  * @param op type of next operation
  * @return ERROR_OK in case of success, ERROR_XXX code otherwise
  *************************************************************************************************/
-static int cmsis_algo_init(struct cmsis_flash *algo, struct target *target, uint32_t address,
+static int cmsis_algo_init(struct flash_bank *bank, struct target *target, uint32_t address,
 	uint32_t clock, enum cmsis_operation op)
 {
+	struct cmsis_flash *algo = bank->driver_priv;
+
 	if (algo->init_op != CMSIS_OPERATION_INVALID) {
 		LOG_ERROR("CMSIS algorithm already initialized");
 		return ERROR_FAIL;
@@ -383,11 +384,12 @@ static int cmsis_algo_init(struct cmsis_flash *algo, struct target *target, uint
 		return hr;
 
 	if (result) {
-		LOG_ERROR("cmsis algorithm: Init operation failed");
+		LOG_ERROR("cmsis algorithm: Init operation failed (%d)", result);
 		return ERROR_FAIL;
 	}
 
 	algo->init_op = op;
+	bank->is_memory_mapped = true;
 	return ERROR_OK;
 }
 
@@ -398,8 +400,10 @@ static int cmsis_algo_init(struct cmsis_flash *algo, struct target *target, uint
  * @param op type of next operation
  * @return ERROR_OK in case of success, ERROR_XXX code otherwise
  *************************************************************************************************/
-static int cmsis_algo_uninit(struct cmsis_flash *algo, struct target *target, uint32_t op)
+static int cmsis_algo_uninit(struct flash_bank *bank, struct target *target, uint32_t op)
 {
+	struct cmsis_flash *algo = bank->driver_priv;
+
 	if (algo->init_op == CMSIS_OPERATION_INVALID) {
 		LOG_ERROR("CMSIS algorithm already uninitialized");
 		return ERROR_FAIL;
@@ -418,11 +422,12 @@ static int cmsis_algo_uninit(struct cmsis_flash *algo, struct target *target, ui
 		return hr;
 
 	if (result) {
-		LOG_ERROR("cmsis algorithm: UnInit operation failed");
+		LOG_ERROR("cmsis algorithm: UnInit operation failed (%d)", result);
 		return ERROR_FAIL;
 	}
 
 	algo->init_op = CMSIS_OPERATION_INVALID;
+	bank->is_memory_mapped = false;
 	return ERROR_OK;
 }
 
@@ -468,7 +473,7 @@ static int cmsis_algo_erase_sector(struct cmsis_flash *algo, struct target *targ
 		return hr;
 
 	if (result) {
-		LOG_ERROR("cmsis algorithm: EraseSector operation failed");
+		LOG_ERROR("cmsis algorithm: EraseSector operation failed (%d)", result);
 		return ERROR_FAIL;
 	}
 
@@ -493,7 +498,7 @@ static int cmsis_algo_erase_chip(struct cmsis_flash *algo, struct target *target
 		return hr;
 
 	if (result) {
-		LOG_ERROR("cmsis algorithm: EraseChip operation failed");
+		LOG_ERROR("cmsis algorithm: EraseChip operation failed (%d)", result);
 		return ERROR_FAIL;
 	}
 
@@ -521,7 +526,7 @@ static int cmsis_algo_program_page(struct cmsis_flash *algo, struct target *targ
 		return hr;
 
 	if (result) {
-		LOG_ERROR("cmsis algorithm: ProgramPage operation failed");
+		LOG_ERROR("cmsis algorithm: ProgramPage operation failed (%d)", result);
 		return ERROR_FAIL;
 	}
 
@@ -548,7 +553,7 @@ static int cmsis_flash_prepare_algo(struct flash_bank *bank, enum cmsis_operatio
 	if (hr != ERROR_OK)
 		return hr;
 
-	hr = cmsis_algo_init(algo, target, (uint32_t)bank->base, 0, op);
+	hr = cmsis_algo_init(bank, target, (uint32_t)bank->base, 0, op);
 	if (hr != ERROR_OK)
 		cmsis_flash_unload_algo(algo, target);
 
@@ -564,10 +569,12 @@ static void cmsis_flash_release_algo(struct flash_bank *bank)
 	struct cmsis_flash *algo = bank->driver_priv;
 	struct target *target = bank->target;
 
-	cmsis_algo_uninit(algo, target, algo->init_op);
+	cmsis_algo_uninit(bank, target, algo->init_op);
 
 	/* Hack: Reinitialize algo to make sure memory is mapped for read/verify/mdw */
-	cmsis_algo_init(algo, target, (uint32_t)bank->base, 0, CMSIS_OPERATION_VERIFY);
+	cmsis_flash_unload_algo(algo, target);
+	cmsis_flash_load_algo(algo, target);
+	cmsis_algo_init(bank, target, (uint32_t)bank->base, 0, CMSIS_OPERATION_VERIFY);
 	algo->init_op = CMSIS_OPERATION_INVALID;
 
 	cmsis_flash_unload_algo(algo, target);
@@ -921,7 +928,33 @@ static int cmsis_flash_get_info(struct flash_bank *bank, struct command_invocati
 	if (algo->is_probed == false)
 		return ERROR_FAIL;
 
-	command_print_sameline(cmd, "CMSIS Flash Device: %s", algo->flash_dev.dev_name);
+	command_print(cmd, "CMSIS Flash Device: %s", algo->flash_dev.dev_name);
+	command_print(cmd, " Address range: 0x%08" PRIx32 " - 0x%08" PRIx32,
+		algo->flash_dev.dev_addr, algo->flash_dev.dev_addr + algo->flash_dev.sz_dev -1);
+	command_print(cmd, " Program page size: %" PRIu32 " bytes", algo->flash_dev.sz_page);
+	command_print(cmd, " Sectors:");
+
+	unsigned i = 0;
+	uint32_t group_start;
+	uint32_t group_next;
+	do {
+		group_start = algo->flash_dev.sectors[i].addr;
+		group_next = algo->flash_dev.sectors[i + 1].addr;
+		uint32_t group_sec_size = algo->flash_dev.sectors[i].size;
+		if (group_next == UINT32_MAX)
+			group_next = algo->flash_dev.sz_dev;
+
+		if((group_next - group_start) % group_sec_size) {
+			LOG_ERROR("Invalid sector alignment, the 'FlashDevice' structure is invalid");
+			break;
+		}
+
+		unsigned num_sectors = (group_next - group_start) / group_sec_size;
+		command_print(cmd, "  %4" PRIu32 " x %-7" PRIu32 " bytes @ 0x%08" PRIx32, num_sectors, group_sec_size,
+					  algo->flash_dev.dev_addr + group_start);
+		i++;
+	} while(group_next < algo->flash_dev.sz_dev);
+
 	return ERROR_OK;
 }
 
@@ -948,6 +981,8 @@ FLASH_BANK_COMMAND_HANDLER(cmsis_flash_bank_command)
 		LOG_ERROR("cmsis_flash: wrong number of params");
 		return ERROR_COMMAND_SYNTAX_ERROR;
 	}
+
+	bank->is_memory_mapped = false;
 
 	const char *algo_url = CMD_ARGV[6];
 	uint32_t stack_size = strtol(CMD_ARGV[7], NULL, 0);
@@ -979,10 +1014,6 @@ FLASH_BANK_COMMAND_HANDLER(cmsis_flash_bank_command)
 	int hr = image_open(&algo->image, algo_url, "elf");
 	if (hr != ERROR_OK)
 		goto free_algo;
-
-	/* Initialize all symbol offsets to some invalid value */
-	for (size_t i = 0; i < sizeof(cmsis_symbols) / sizeof(cmsis_symbols[0]); i++)
-		cmsis_symbols[i].offset = UINT32_MAX;
 
 	/* Resolve all required and optional symbols */
 	hr = image_resolve_symbols(&algo->image, cmsis_symbols);
@@ -1121,12 +1152,9 @@ COMMAND_HANDLER(cmsis_flash_initialize)
 		LOG_INFO("Initializing cmsis_flash bank %s (%s)", name, algo->flash_dev.dev_name);
 		was_initialized = true;
 
-		enum log_levels lvl = change_debug_level(LOG_LVL_USER);
 		int hr = cmsis_flash_prepare_algo(bank, CMSIS_OPERATION_VERIFY);
 		if(hr == ERROR_OK)
 			cmsis_flash_release_algo(bank);
-
-		change_debug_level(lvl);
 
 		if(hr != ERROR_OK)
 			LOG_ERROR("Failed to initialize bank %s", name);
@@ -1211,12 +1239,23 @@ static const struct command_registration cmsis_flash_command_handlers[] = {
 	{
 		.name = "cmsis_flash",
 		.mode = COMMAND_EXEC,
-		.help = "PSoC 6 flash command group",
+		.help = "cmsis_flash command group",
 		.usage = "",
 		.chain = cmsis_flash_exec_command_handlers,
 	},
 	COMMAND_REGISTRATION_DONE
 };
+
+static int cmsis_flash_read(struct flash_bank *bank, uint8_t *buffer, uint32_t offset, uint32_t count) {
+	int hr = cmsis_flash_prepare_algo(bank, CMSIS_OPERATION_VERIFY);
+	if (hr != ERROR_OK)
+		return hr;
+
+	hr = default_flash_read(bank, buffer, offset, count);
+
+	cmsis_flash_release_algo(bank);
+	return hr;
+}
 
 struct flash_driver cmsis_flash = {
 	.usage = "$_FLASHNAME cmsis_flash <addr:0> <size:0> 0 0 <target> "
@@ -1227,7 +1266,7 @@ struct flash_driver cmsis_flash = {
 	.erase = cmsis_flash_erase,
 	.protect = cmsis_flash_protect,
 	.write = cmsis_flash_program,
-	.read = default_flash_read,
+	.read = cmsis_flash_read,
 	.probe = cmsis_flash_probe,
 	.auto_probe = cmsis_flash_auto_probe,
 	.erase_check = cmsis_flash_blank_check,

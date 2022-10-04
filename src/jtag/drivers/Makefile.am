@@ -186,6 +186,8 @@ DRIVERFILES += %D%/imx_gpio.c
 endif
 if KITPROG
 DRIVERFILES += %D%/kitprog.c
+endif
+if KITPROG3
 DRIVERFILES += %D%/kitprog3.c
 endif
 if XDS110

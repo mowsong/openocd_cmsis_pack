@@ -117,6 +117,42 @@ static const struct sflash_region psoc6_safe_sflash_regions[4] = {
 };
 
 /** ***********************************************************************************************
+ * @brief Checks for known bugs in the boot code, updates mxs40_bank_info accordingly
+ *
+ * @param bank current flash bank
+ * @return ERROR_OK in case of success, ERROR_XXX code otherwise
+ *************************************************************************************************/
+static int psoc6_check_quirks(struct flash_bank *bank)
+{
+	struct mxs40_bank_info *info = bank->driver_priv;
+
+	/* Pre-ES100 FlashBoot (older than 3.1.0.129) has buggy EraseSubSector API */
+	uint32_t fb_ver_hi;
+	int hr = target_read_u32(bank->target, 0x16002004, &fb_ver_hi);
+	if (hr != ERROR_OK)
+		return hr;
+
+	uint32_t  fb_ver_lo;
+	hr = target_read_u32(bank->target, 0x16002018, &fb_ver_lo);
+	if (hr != ERROR_OK)
+		return hr;
+
+	uint8_t b0 =  fb_ver_hi >> 28;
+	uint8_t b1 = (fb_ver_hi >> 24) & 0xF;
+	uint8_t b2 = (fb_ver_hi >> 16) & 0xFF;
+
+	uint16_t fb_build = (fb_ver_lo & 0xFFFF);
+	uint8_t fb_patch = fb_ver_lo >> 24;
+
+	if (b0 == 2 && b1 == 3 && b2 == 1 && fb_patch == 0 && fb_build < 129) {
+		LOG_DEBUG("Chip has EraseSubSector bug, FB %d.%d.%d.(%d < 129)", b1, b2, fb_patch, fb_build);
+		info->has_erase_subsector_bug = true;
+	}
+
+	return ERROR_OK;
+}
+
+/** ***********************************************************************************************
  * @brief Probes the device and populates related data structures with target flash geometry data.
  * This is done in non-intrusive way, no SROM API calls are involved so GDB can safely attach to a
  * running target. Function assumes that size of Work Flash is 32kB (true for all current part numbers)
@@ -128,8 +164,6 @@ static int psoc6_probe(struct flash_bank *bank)
 {
 	struct mxs40_bank_info *info = bank->driver_priv;
 	struct target *target = bank->target;
-
-	int hr = ERROR_OK;
 
 	if (bank->sectors) {
 		free(bank->sectors);
@@ -161,6 +195,10 @@ static int psoc6_probe(struct flash_bank *bank)
 		return ERROR_FLASH_BANK_INVALID;
 	}
 
+	int hr = psoc6_check_quirks(bank);
+	if (hr != ERROR_OK)
+		return hr;
+
 	size_t num_sectors = bank_size / row_sz;
 	bank->size = bank_size;
 	bank->num_sectors = num_sectors;
@@ -178,7 +216,7 @@ static int psoc6_probe(struct flash_bank *bank)
 	info->page_size = row_sz;
 	info->is_probed = true;
 
-	return hr;
+	return ERROR_OK;
 }
 
 /** ***********************************************************************************************
@@ -204,6 +242,7 @@ static size_t psoc6_erase_builder(struct flash_bank *bank, int first, int last, 
 
 	/* Number of rows in single sector */
 	const int rows_in_sector = sector_size / info->page_size;
+	const int rows_in_sub_sector = 8;
 	size_t sector_count = 0;
 
 	while (last >= first) {
@@ -212,6 +251,11 @@ static size_t psoc6_erase_builder(struct flash_bank *bank, int first, int last, 
 			/* Erase Sector if we are on sector boundary and erase size covers whole sector */
 			address_buffer[sector_count++] = address | 1u;
 			first += rows_in_sector;
+		} else if (!info->has_erase_subsector_bug &&
+				  (first % rows_in_sub_sector) == 0 && (last - first + 1) >= rows_in_sub_sector) {
+			/* Erase Sub-Sector if we are on sub-sector boundary and erase size covers whole sub-sector */
+			address_buffer[sector_count++] = address | 2u;
+			first += rows_in_sub_sector;
 		} else {
 			/* Erase Row otherwise */
 			address_buffer[sector_count++] = address;

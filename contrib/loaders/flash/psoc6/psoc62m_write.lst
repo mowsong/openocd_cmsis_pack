@@ -25,16 +25,16 @@
   26 0002 87B0     		sub	sp, sp, #28
   27 0004 0191     		str	r1, [sp, #4]
   28              		.syntax divided
-  29              	@ 88 "psoc6_write.c" 1
+  29              	@ 110 "psoc6_write.c" 1
   30 0006 62B6     		cpsie i
   31              	@ 0 "" 2
   32              		.thumb
   33              		.syntax unified
   34 0008 F027     		movs	r7, #240
-  35 000a 254C     		ldr	r4, .L14
+  35 000a 264C     		ldr	r4, .L14
   36 000c 3F01     		lsls	r7, r7, #4
   37 000e 2168     		ldr	r1, [r4]
-  38 0010 244E     		ldr	r6, .L14+4
+  38 0010 254E     		ldr	r6, .L14+4
   39 0012 3940     		ands	r1, r7
   40 0014 4F1E     		subs	r7, r1, #1
   41 0016 B941     		sbcs	r1, r1, r7
@@ -47,41 +47,41 @@
   48 0024 3D43     		orrs	r5, r7
   49 0026 3560     		str	r5, [r6]
   50              	.L2:
-  51 0028 A021     		movs	r1, #160
-  52 002a F026     		movs	r6, #240
-  53 002c 0906     		lsls	r1, r1, #24
-  54 002e 0127     		movs	r7, #1
-  55 0030 8C46     		mov	ip, r1
-  56 0032 3601     		lsls	r6, r6, #4
-  57              	.L3:
-  58 0034 002B     		cmp	r3, #0
-  59 0036 01D1     		bne	.L4
-  60              	.L9:
-  61              		.syntax divided
-  62              	@ 122 "psoc6_write.c" 1
-  63 0038 00BE     		bkpt 0
-  64              	@ 0 "" 2
-  65              		.thumb
-  66              		.syntax unified
-  67 003a FDE7     		b	.L9
-  68              	.L4:
-  69 003c 4568     		ldr	r5, [r0, #4]
-  70 003e 0168     		ldr	r1, [r0]
-  71 0040 8D42     		cmp	r5, r1
-  72 0042 FBD0     		beq	.L4
-  73 0044 184D     		ldr	r5, .L14+8
-  74 0046 4168     		ldr	r1, [r0, #4]
-  75 0048 0295     		str	r5, [sp, #8]
-  76 004a 0A25     		movs	r5, #10
-  77 004c FF35     		adds	r5, r5, #255
-  78 004e 0395     		str	r5, [sp, #12]
-  79 0050 0492     		str	r2, [sp, #16]
-  80 0052 0591     		str	r1, [sp, #20]
-  81 0054 2168     		ldr	r1, [r4]
-  82 0056 3140     		ands	r1, r6
+  51 0028 A027     		movs	r7, #160
+  52 002a 0126     		movs	r6, #1
+  53 002c 3F06     		lsls	r7, r7, #24
+  54              	.L3:
+  55 002e 002B     		cmp	r3, #0
+  56 0030 01D1     		bne	.L4
+  57              	.L9:
+  58              		.syntax divided
+  59              	@ 144 "psoc6_write.c" 1
+  60 0032 00BE     		bkpt 0
+  61              	@ 0 "" 2
+  62              		.thumb
+  63              		.syntax unified
+  64 0034 FDE7     		b	.L9
+  65              	.L4:
+  66 0036 4168     		ldr	r1, [r0, #4]
+  67 0038 8C46     		mov	ip, r1
+  68 003a 0168     		ldr	r1, [r0]
+  69 003c 8C45     		cmp	ip, r1
+  70 003e FAD0     		beq	.L4
+  71 0040 1A4D     		ldr	r5, .L14+8
+  72 0042 4168     		ldr	r1, [r0, #4]
+  73 0044 0295     		str	r5, [sp, #8]
+  74 0046 0A25     		movs	r5, #10
+  75 0048 FF35     		adds	r5, r5, #255
+  76 004a 0395     		str	r5, [sp, #12]
+  77 004c F025     		movs	r5, #240
+  78 004e 0492     		str	r2, [sp, #16]
+  79 0050 0591     		str	r1, [sp, #20]
+  80 0052 2168     		ldr	r1, [r4]
+  81 0054 2D01     		lsls	r5, r5, #4
+  82 0056 2940     		ands	r1, r5
   83 0058 4D1E     		subs	r5, r1, #1
   84 005a A941     		sbcs	r1, r1, r5
-  85 005c 134D     		ldr	r5, .L14+12
+  85 005c 144D     		ldr	r5, .L14+12
   86 005e 4919     		adds	r1, r1, r5
   87 0060 4901     		lsls	r1, r1, #5
   88              	.L5:
@@ -90,45 +90,47 @@
   91 0066 FCDA     		bge	.L5
   92 0068 02AD     		add	r5, sp, #8
   93 006a CD60     		str	r5, [r1, #12]
-  94 006c 8F60     		str	r7, [r1, #8]
+  94 006c 8E60     		str	r6, [r1, #8]
   95              	.L6:
   96 006e CD69     		ldr	r5, [r1, #28]
   97 0070 002D     		cmp	r5, #0
   98 0072 FCDB     		blt	.L6
-  99 0074 029D     		ldr	r5, [sp, #8]
- 100 0076 290F     		lsrs	r1, r5, #28
- 101 0078 0907     		lsls	r1, r1, #28
- 102 007a 6145     		cmp	r1, ip
- 103 007c 03D0     		beq	.L7
- 104 007e 0021     		movs	r1, #0
- 105 0080 4160     		str	r1, [r0, #4]
- 106              		.syntax divided
- 107              	@ 105 "psoc6_write.c" 1
- 108 0082 281C     		mov r0, r5
- 109 0084 00BE     		bkpt 0
- 110              	@ 0 "" 2
- 111              		.thumb
- 112              		.syntax unified
- 113              	.L7:
- 114 0086 8025     		movs	r5, #128
- 115 0088 4168     		ldr	r1, [r0, #4]
- 116 008a AD00     		lsls	r5, r5, #2
- 117 008c 5219     		adds	r2, r2, r5
- 118 008e 4919     		adds	r1, r1, r5
- 119 0090 019D     		ldr	r5, [sp, #4]
- 120 0092 A942     		cmp	r1, r5
- 121 0094 01D3     		bcc	.L8
- 122 0096 0100     		movs	r1, r0
- 123 0098 0831     		adds	r1, r1, #8
- 124              	.L8:
- 125 009a 4160     		str	r1, [r0, #4]
- 126 009c 013B     		subs	r3, r3, #1
- 127 009e C9E7     		b	.L3
- 128              	.L15:
- 129              		.align	2
- 130              	.L14:
- 131 00a0 00002040 		.word	1075838976
- 132 00a4 08102240 		.word	1075974152
- 133 00a8 00010006 		.word	100663552
- 134 00ac 00100102 		.word	33624064
- 136              		.ident	"GCC: (bleeding-edge-toolchain) 9.2.0"
+  99 0074 0299     		ldr	r1, [sp, #8]
+ 100 0076 8C46     		mov	ip, r1
+ 101 0078 090F     		lsrs	r1, r1, #28
+ 102 007a 0907     		lsls	r1, r1, #28
+ 103 007c B942     		cmp	r1, r7
+ 104 007e 03D0     		beq	.L7
+ 105 0080 0021     		movs	r1, #0
+ 106 0082 4160     		str	r1, [r0, #4]
+ 107              		.syntax divided
+ 108              	@ 127 "psoc6_write.c" 1
+ 109 0084 6046     		mov r0, ip
+ 110 0086 00BE     		bkpt 0
+ 111              	@ 0 "" 2
+ 112              		.thumb
+ 113              		.syntax unified
+ 114              	.L7:
+ 115 0088 8021     		movs	r1, #128
+ 116 008a 8900     		lsls	r1, r1, #2
+ 117 008c 0D00     		movs	r5, r1
+ 118 008e 5218     		adds	r2, r2, r1
+ 119 0090 4168     		ldr	r1, [r0, #4]
+ 120 0092 4919     		adds	r1, r1, r5
+ 121 0094 019D     		ldr	r5, [sp, #4]
+ 122 0096 A942     		cmp	r1, r5
+ 123 0098 01D3     		bcc	.L8
+ 124 009a 0100     		movs	r1, r0
+ 125 009c 0831     		adds	r1, r1, #8
+ 126              	.L8:
+ 127 009e 4160     		str	r1, [r0, #4]
+ 128 00a0 013B     		subs	r3, r3, #1
+ 129 00a2 C4E7     		b	.L3
+ 130              	.L15:
+ 131              		.align	2
+ 132              	.L14:
+ 133 00a4 00002040 		.word	1075838976
+ 134 00a8 08102240 		.word	1075974152
+ 135 00ac 00010006 		.word	100663552
+ 136 00b0 00100102 		.word	33624064
+ 138              		.ident	"GCC: (bleeding-edge-toolchain) 11.2.0"

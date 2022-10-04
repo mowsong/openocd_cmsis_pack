@@ -27,6 +27,8 @@
 #include <target/image.h>
 #include "cmspi.h"
 #include "sfdp.h"
+#include "helper/binarybuffer.h"
+#include "flash/progress.h"
 
 #define I2C_ADDR_EEPROM_NORM 0xA0
 
@@ -1376,12 +1378,15 @@ static int cmspi_erase(struct flash_bank *bank, unsigned int first,
 		}
 	}
 
+	progress_init(last - first + 1, ERASING);
 	for (sector = first; sector <= last; sector++) {
 		retval = cmspi_erase_sector(bank, sector);
 		if (retval != ERROR_OK)
 			break;
+		progress_sofar(sector - first + 1);
 		keep_alive();
 	}
+	progress_done(retval);
 
 	if (retval != ERROR_OK)
 		LOG_ERROR("Flash sector_erase failed on sector %d", sector);

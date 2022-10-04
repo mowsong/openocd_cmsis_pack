@@ -467,9 +467,8 @@ void command_print_sameline(struct command_invocation *cmd, const char *format, 
 		/* We already printed it above
 		 * command_output_text(context, string); */
 
-		if(g_local_echo) {
+		if(g_local_echo)
 			command_output_text(cmd->ctx, string);
-		}
 
 		free(string);
 	}
@@ -497,9 +496,8 @@ void command_print(struct command_invocation *cmd, const char *format, ...)
 		/* We already printed it above
 		 * command_output_text(context, string); */
 
-		if(g_local_echo) {
+		if(g_local_echo)
 			command_output_text(cmd->ctx, string);
-		}
 
 		free(string);
 	}

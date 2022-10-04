@@ -694,6 +694,12 @@ static int ftdi_initialize(void)
 
 static int ftdi_quit(void)
 {
+	/* Configure all pins as inputs to avoid congestion
+	 * if several probes are connected in parallel */
+	mpsse_set_data_bits_low_byte(mpsse_ctx, 0, 0);
+	mpsse_set_data_bits_high_byte(mpsse_ctx, 0, 0);
+	mpsse_flush(mpsse_ctx);
+
 	mpsse_close(mpsse_ctx);
 
 	struct signal *sig = signals;

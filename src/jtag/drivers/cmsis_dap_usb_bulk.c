@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
+
 /***************************************************************************
  *   Copyright (C) 2018 by Mickaël Thomas                                  *
  *   mickael9@gmail.com                                                    *
@@ -23,18 +25,6 @@
  *   Copyright (C) 2021                                                    *
  *     <Cypress Semiconductor Corporation (an Infineon company)>           *
  *                                                                         *
- *   This program is free software; you can redistribute it and/or modify  *
- *   it under the terms of the GNU General Public License as published by  *
- *   the Free Software Foundation; either version 2 of the License, or     *
- *   (at your option) any later version.                                   *
- *                                                                         *
- *   This program is distributed in the hope that it will be useful,       *
- *   but WITHOUT ANY WARRANTY; without even the implied warranty of        *
- *   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the         *
- *   GNU General Public License for more details.                          *
- *                                                                         *
- *   You should have received a copy of the GNU General Public License     *
- *   along with this program.  If not, see <http://www.gnu.org/licenses/>. *
  ***************************************************************************/
 
 #ifdef HAVE_CONFIG_H
@@ -62,7 +52,7 @@ static int cmsis_dap_usb_interface = -1;
 static void cmsis_dap_usb_close(struct cmsis_dap *dap);
 static int cmsis_dap_usb_alloc(struct cmsis_dap *dap, unsigned int pkt_sz);
 
-static int cmsis_dap_usb_open(struct cmsis_dap *dap, uint16_t vids[], uint16_t pids[], char *serial)
+static int cmsis_dap_usb_open(struct cmsis_dap *dap, uint16_t vids[], uint16_t pids[], const char *serial)
 {
 	int err;
 	struct libusb_context *ctx;
@@ -689,7 +679,7 @@ static int cmsis_dap_usb_read_async(struct cmsis_dap *dap, int timeout_ms)
 COMMAND_HANDLER(cmsis_dap_handle_usb_interface_command)
 {
 	if (CMD_ARGC == 1)
-		cmsis_dap_usb_interface = strtoul(CMD_ARGV[0], NULL, 10);
+		COMMAND_PARSE_NUMBER(int, CMD_ARGV[0], cmsis_dap_usb_interface);
 	else
 		LOG_ERROR("expected exactly one argument to cmsis_dap_usb_interface <interface_number>");
 

@@ -43,8 +43,8 @@ struct freertos_params {
 	const struct rtos_register_stacking *stacking_info_cm33_nofp_notz;
 };
 
-static int64_t freertos_cm33_nofp_notz_stack_align(struct target *target, const uint8_t *stack_data,
-        const struct rtos_register_stacking *stacking, int64_t stack_ptr)
+static target_addr_t freertos_cm33_nofp_notz_stack_align(struct target *target, const uint8_t *stack_data,
+		const struct rtos_register_stacking *stacking, target_addr_t stack_ptr)
 {
     const int XPSR_OFFSET = 0x44;
 	return rtos_cortex_m_stack_align(target, stack_data, stacking,

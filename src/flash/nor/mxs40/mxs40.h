@@ -77,6 +77,8 @@ struct mxs40_regs {
 #define SROMAPI_DATA_LOCATION_MSK           0x00000001u
 //MYKT#define IPC_TIMEOUT_MS                      1500
 #define IPC_TIMEOUT_MS                      20000
+#define CM0_VTOR_TIMEOUT_MS                 600
+#define OTHER_VTOR_TIMEOUT_MS               10000
 
 #define MXS40_CHIP_PROT_UNKNOWN             0x00u
 #define MXS40_CHIP_PROT_VIRGIN              0x01u
@@ -138,6 +140,7 @@ struct sflash_region {
 struct mxs40_bank_info {
 	bool is_probed;
 	bool ppu_read_protected;
+	bool has_erase_subsector_bug;
 	uint32_t size_override;
 	uint32_t page_size;
 	size_t program_algo_size;
@@ -419,5 +422,11 @@ int efuse_probe(struct flash_bank *bank);
  * @param bank - the bank being destroyed
  *************************************************************************************************/
 void mxs40_free_driver_priv(struct flash_bank *bank);
+
+/** ***********************************************************************************************
+ * @brief Prepares T2G devices for executing SROM calls
+ * @param bank - the flash bank
+ *************************************************************************************************/
+int traveo2_prepare(struct flash_bank *bank);
 
 #endif //#ifndef MXS40_H

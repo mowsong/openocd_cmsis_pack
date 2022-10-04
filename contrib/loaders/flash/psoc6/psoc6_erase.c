@@ -41,8 +41,21 @@ __inline __attribute__((always_inline))
 static uint32_t erase_row_or_sector(uint32_t flash_addr)
 {
 	volatile uint32_t req[2];
-	req[0] = (flash_addr & 1u) ? SROMAPI_ERASESECTOR_REQ : SROMAPI_ERASEROW_REQ;
-	req[1] = flash_addr & ~1u;
+	switch (flash_addr & 0x03) {
+	case 0:
+		req[0] = SROMAPI_ERASEROW_REQ;
+		break;
+	case 1:
+		req[0] = SROMAPI_ERASESECTOR_REQ;
+		break;
+	case 2:
+		req[0] = SROMAPI_ERASESUBSECTOR_REQ;
+		break;
+	case 3:
+	default:
+		return 0xF00DBAAD;
+	}
+	req[1] = flash_addr & ~3u;
 
 	call_sromapi((uint32_t)&req[0]);
 

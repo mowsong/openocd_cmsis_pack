@@ -37,9 +37,15 @@ struct cmsis_dap_backend {
 	int (*packet_buffer_alloc)(struct cmsis_dap *dap, unsigned int pkt_sz);
 };
 
+#if BUILD_CMSIS_DAP_HID == 1
 extern const struct cmsis_dap_backend cmsis_dap_hid_backend;
+#endif
+
+#if BUILD_CMSIS_DAP_USB == 1
 extern const struct cmsis_dap_backend cmsis_dap_usb_backend;
 extern const struct cmsis_dap_backend cmsis_dap_usb_backend_async;
+#endif
+
 extern const struct command_registration cmsis_dap_usb_subcommand_handlers[];
 
 extern struct cmsis_dap *cmsis_dap_handle;

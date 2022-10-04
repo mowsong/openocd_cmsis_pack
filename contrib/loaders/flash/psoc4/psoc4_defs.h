@@ -62,8 +62,7 @@
 #endif
 
 /* These flags are passed in MSB of row_id parameter */
-#define SUPERVISORY_FLASH_BIT_BASK (1u << 31) /* Perform SFlash programming */
-#define FLASH_CONTROLLER_BIT_MASH  (1u << 30) /* Select Flash Controller #1 on PSoC4-HV */
+#define SUPERVISORY_FLASH_BIT_MASK (1u << 31) /* Perform SFlash programming */
 
 #define read_io(addr)                  (*((volatile uint32_t *)(addr)))
 #define write_io(addr, value)          (*((volatile uint32_t *)(addr)) = (uint32_t)(value))
