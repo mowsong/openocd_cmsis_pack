@@ -1,22 +1,11 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
+
 /***************************************************************************
 *   Copyright (C) 2005 by Dominic Rath                                    *
 *   Dominic.Rath@gmx.de                                                   *
 *                                                                         *
 *   Copyright (C) 2007-2010 Øyvind Harboe                                 *
 *   oyvind.harboe@zylin.com                                               *
-*                                                                         *
-*   This program is free software; you can redistribute it and/or modify  *
-*   it under the terms of the GNU General Public License as published by  *
-*   the Free Software Foundation; either version 2 of the License, or     *
-*   (at your option) any later version.                                   *
-*                                                                         *
-*   This program is distributed in the hope that it will be useful,       *
-*   but WITHOUT ANY WARRANTY; without even the implied warranty of        *
-*   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the         *
-*   GNU General Public License for more details.                          *
-*                                                                         *
-*   You should have received a copy of the GNU General Public License     *
-*   along with this program.  If not, see <http://www.gnu.org/licenses/>. *
 ***************************************************************************/
 
 #ifndef OPENOCD_JTAG_JTAG_H
@@ -135,6 +124,9 @@ struct jtag_tap {
 	/** Flag saying whether to ignore version field in expected_ids[] */
 	bool ignore_version;
 
+	/** Flag saying whether to ignore the bypass bit in the code */
+	bool ignore_bypass;
+
 	/** current instruction */
 	uint8_t *cur_instr;
 	/** Bypass register selected */
@@ -217,31 +209,6 @@ int jtag_unregister_event_callback(jtag_event_handler_t f, void *x);
 
 int jtag_call_event_callbacks(enum jtag_event event);
 
-
-/** @returns The current JTAG speed setting. */
-int jtag_get_speed(int *speed);
-
-/**
- * Given a @a speed setting, use the interface @c speed_div callback to
- * adjust the setting.
- * @param speed The speed setting to convert back to readable KHz.
- * @returns ERROR_OK if the interface has not been initialized or on success;
- *	otherwise, the error code produced by the @c speed_div callback.
- */
-int jtag_get_speed_readable(int *speed);
-
-/** Attempt to configure the interface for the specified KHz. */
-int jtag_config_khz(unsigned khz);
-
-/**
- * Attempt to enable RTCK/RCLK. If that fails, fallback to the
- * specified frequency.
- */
-int jtag_config_rclk(unsigned fallback_speed_khz);
-
-/** Retrieves the clock speed of the JTAG interface in KHz. */
-unsigned jtag_get_speed_khz(void);
-
 enum reset_types {
 	RESET_NONE            = 0x0,
 	RESET_HAS_TRST        = 0x1,
@@ -284,12 +251,6 @@ bool jtag_will_verify(void);
 void jtag_set_verify_capture_ir(bool enable);
 /** @returns True if IR scan verification will be performed. */
 bool jtag_will_verify_capture_ir(void);
-
-/** Initialize debug adapter upon startup.  */
-int adapter_init(struct command_context *cmd_ctx);
-
-/** Shutdown the debug adapter upon program exit. */
-int adapter_quit(void);
 
 /** Set ms to sleep after jtag_execute_queue() flushes queue. Debug purposes. */
 void jtag_set_flush_queue_sleep(int ms);
@@ -574,7 +535,8 @@ int jtag_srst_asserted(int *srst_asserted);
  * @param field Pointer to scan field.
  * @param value Pointer to scan value.
  * @param mask Pointer to scan mask; may be NULL.
- * @returns Nothing, but calls jtag_set_error() on any error.
+ *
+ * returns Nothing, but calls jtag_set_error() on any error.
  */
 void jtag_check_value_mask(struct scan_field *field, uint8_t *value, uint8_t *mask);
 

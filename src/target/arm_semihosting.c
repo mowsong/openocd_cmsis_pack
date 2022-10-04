@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
+
 /***************************************************************************
  *   Copyright (C) 2009 by Marvell Technology Group Ltd.                   *
  *   Written by Nicolas Pitre <nico@marvell.com>                           *
@@ -10,19 +12,6 @@
  *                                                                         *
  *   Copyright (C) 2018 by Liviu Ionescu                                   *
  *   <ilg@livius.net>                                                      *
- *                                                                         *
- *   This program is free software; you can redistribute it and/or modify  *
- *   it under the terms of the GNU General Public License as published by  *
- *   the Free Software Foundation; either version 2 of the License, or     *
- *   (at your option) any later version.                                   *
- *                                                                         *
- *   This program is distributed in the hope that it will be useful,       *
- *   but WITHOUT ANY WARRANTY; without even the implied warranty of        *
- *   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the         *
- *   GNU General Public License for more details.                          *
- *                                                                         *
- *   You should have received a copy of the GNU General Public License     *
- *   along with this program.  If not, see <http://www.gnu.org/licenses/>. *
  ***************************************************************************/
 
 /**
@@ -315,7 +304,7 @@ int arm_semihosting(struct target *target, int *retval)
 				return 0;
 		} else if (arm->core_state == ARM_STATE_ARM) {
 			r = arm->pc;
-			pc = buf_get_u32(arm->pc->value, 0, 32);
+			pc = buf_get_u32(r->value, 0, 32);
 
 			/* A32 instruction => check for HLT 0xF000 (0xE10F0070) */
 			uint32_t insn = 0;
@@ -330,7 +319,7 @@ int arm_semihosting(struct target *target, int *retval)
 				return 0;
 		} else if (arm->core_state == ARM_STATE_THUMB) {
 			r = arm->pc;
-			pc = buf_get_u32(arm->pc->value, 0, 32);
+			pc = buf_get_u32(r->value, 0, 32);
 
 			/* T32 instruction => check for HLT 0x3C (0xBABC) */
 			uint16_t insn = 0;
@@ -367,10 +356,13 @@ int arm_semihosting(struct target *target, int *retval)
 		}
 
 		/* Check for ARM operation numbers. */
-		if (semihosting->op >= 0 && semihosting->op <= 0x31) {
+		if ((semihosting->op >= 0 && semihosting->op <= 0x31) ||
+			(semihosting->op >= 0x100 && semihosting->op <= 0x107)) {
+
 			*retval = semihosting_common(target);
 			if (*retval != ERROR_OK) {
-				LOG_ERROR("Failed semihosting operation (0x%02X)", semihosting->op);
+				LOG_ERROR("Failed semihosting operation (0x%02X)",
+						semihosting->op);
 				return 0;
 			}
 		} else {

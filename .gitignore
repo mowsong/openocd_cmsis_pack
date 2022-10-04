@@ -68,6 +68,7 @@ doxygen
 doxygen.log
 Doxyfile
 libtool
+*-libtool
 Makefile
 !contrib/loaders/**/Makefile
 stamp-h1
@@ -95,3 +96,8 @@ TAGS
 
 # ctags tag files
 tags
+
+# GNU Global tag files
+GPATH
+GRTAGS
+GTAGS

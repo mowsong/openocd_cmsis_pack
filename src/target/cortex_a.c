@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
+
 /***************************************************************************
  *   Copyright (C) 2005 by Dominic Rath                                    *
  *   Dominic.Rath@gmx.de                                                   *
@@ -26,19 +28,6 @@
  *   Copyright (C) 2016 Chengyu Zheng                                      *
  *   chengyu.zheng@polimi.it : watchpoint support                          *
  *                                                                         *
- *   This program is free software; you can redistribute it and/or modify  *
- *   it under the terms of the GNU General Public License as published by  *
- *   the Free Software Foundation; either version 2 of the License, or     *
- *   (at your option) any later version.                                   *
- *                                                                         *
- *   This program is distributed in the hope that it will be useful,       *
- *   but WITHOUT ANY WARRANTY; without even the implied warranty of        *
- *   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the         *
- *   GNU General Public License for more details.                          *
- *                                                                         *
- *   You should have received a copy of the GNU General Public License     *
- *   along with this program.  If not, see <http://www.gnu.org/licenses/>. *
- *                                                                         *
  *   Cortex-A8(tm) TRM, ARM DDI 0344H                                      *
  *   Cortex-A9(tm) TRM, ARM DDI 0407F                                      *
  *   Cortex-A4(tm) TRM, ARM DDI 0363E                                      *
@@ -56,6 +45,7 @@
 #include "armv7a_mmu.h"
 #include "target_request.h"
 #include "target_type.h"
+#include "arm_coresight.h"
 #include "arm_opcodes.h"
 #include "arm_semihosting.h"
 #include "jtag/interface.h"
@@ -638,14 +628,11 @@ static int cortex_a_dpm_setup(struct cortex_a_common *a, uint32_t didr)
 static struct target *get_cortex_a(struct target *target, int32_t coreid)
 {
 	struct target_list *head;
-	struct target *curr;
 
-	head = target->head;
-	while (head != (struct target_list *)NULL) {
-		curr = head->target;
+	foreach_smp_target(head, target->smp_targets) {
+		struct target *curr = head->target;
 		if ((curr->coreid == coreid) && (curr->state == TARGET_HALTED))
 			return curr;
-		head = head->next;
 	}
 	return target;
 }
@@ -655,14 +642,12 @@ static int cortex_a_halt_smp(struct target *target)
 {
 	int retval = 0;
 	struct target_list *head;
-	struct target *curr;
-	head = target->head;
-	while (head != (struct target_list *)NULL) {
-		curr = head->target;
+
+	foreach_smp_target(head, target->smp_targets) {
+		struct target *curr = head->target;
 		if ((curr != target) && (curr->state != TARGET_HALTED)
 			&& target_was_examined(curr))
 			retval += cortex_a_halt(curr);
-		head = head->next;
 	}
 	return retval;
 }
@@ -683,7 +668,7 @@ static int update_halt_gdb(struct target *target)
 	if (target->gdb_service)
 		gdb_target = target->gdb_service->target;
 
-	foreach_smp_target(head, target->head) {
+	foreach_smp_target(head, target->smp_targets) {
 		curr = head->target;
 		/* skip calling context */
 		if (curr == target)
@@ -964,11 +949,10 @@ static int cortex_a_restore_smp(struct target *target, int handle_breakpoints)
 {
 	int retval = 0;
 	struct target_list *head;
-	struct target *curr;
 	target_addr_t address;
-	head = target->head;
-	while (head != (struct target_list *)NULL) {
-		curr = head->target;
+
+	foreach_smp_target(head, target->smp_targets) {
+		struct target *curr = head->target;
 		if ((curr != target) && (curr->state != TARGET_RUNNING)
 			&& target_was_examined(curr)) {
 			/*  resume current address , not in step mode */
@@ -976,8 +960,6 @@ static int cortex_a_restore_smp(struct target *target, int handle_breakpoints)
 					handle_breakpoints, 0);
 			retval += cortex_a_internal_restart(curr);
 		}
-		head = head->next;
-
 	}
 	return retval;
 }
@@ -1206,7 +1188,7 @@ static int cortex_a_step(struct target *target, int current, target_addr_t addre
 	stepbreakpoint.length = (arm->core_state == ARM_STATE_THUMB)
 		? 2 : 4;
 	stepbreakpoint.type = BKPT_HARD;
-	stepbreakpoint.set = 0;
+	stepbreakpoint.is_set = false;
 
 	/* Disable interrupts during single step if requested */
 	if (cortex_a->isrmasking_mode == CORTEX_A_ISRMASK_ON) {
@@ -1286,7 +1268,7 @@ static int cortex_a_set_breakpoint(struct target *target,
 	struct armv7a_common *armv7a = &cortex_a->armv7a_common;
 	struct cortex_a_brp *brp_list = cortex_a->brp_list;
 
-	if (breakpoint->set) {
+	if (breakpoint->is_set) {
 		LOG_WARNING("breakpoint already set");
 		return ERROR_OK;
 	}
@@ -1298,7 +1280,7 @@ static int cortex_a_set_breakpoint(struct target *target,
 			LOG_ERROR("ERROR Can not find free Breakpoint Register Pair");
 			return ERROR_TARGET_RESOURCE_NOT_AVAILABLE;
 		}
-		breakpoint->set = brp_i + 1;
+		breakpoint_hw_set(breakpoint, brp_i);
 		if (breakpoint->length == 2)
 			byte_addr_select = (3 << (breakpoint->address & 0x02));
 		control = ((matchmode & 0x7) << 20)
@@ -1363,7 +1345,7 @@ static int cortex_a_set_breakpoint(struct target *target,
 		armv7a_l1_i_cache_inval_virt(target, breakpoint->address,
 						 breakpoint->length);
 
-		breakpoint->set = 0x11;	/* Any nice value but 0 */
+		breakpoint->is_set = true;
 	}
 
 	return ERROR_OK;
@@ -1380,7 +1362,7 @@ static int cortex_a_set_context_breakpoint(struct target *target,
 	struct armv7a_common *armv7a = &cortex_a->armv7a_common;
 	struct cortex_a_brp *brp_list = cortex_a->brp_list;
 
-	if (breakpoint->set) {
+	if (breakpoint->is_set) {
 		LOG_WARNING("breakpoint already set");
 		return retval;
 	}
@@ -1394,7 +1376,7 @@ static int cortex_a_set_context_breakpoint(struct target *target,
 		return ERROR_FAIL;
 	}
 
-	breakpoint->set = brp_i + 1;
+	breakpoint_hw_set(breakpoint, brp_i);
 	control = ((matchmode & 0x7) << 20)
 		| (byte_addr_select << 5)
 		| (3 << 1) | 1;
@@ -1432,7 +1414,7 @@ static int cortex_a_set_hybrid_breakpoint(struct target *target, struct breakpoi
 	struct armv7a_common *armv7a = &cortex_a->armv7a_common;
 	struct cortex_a_brp *brp_list = cortex_a->brp_list;
 
-	if (breakpoint->set) {
+	if (breakpoint->is_set) {
 		LOG_WARNING("breakpoint already set");
 		return retval;
 	}
@@ -1457,7 +1439,7 @@ static int cortex_a_set_hybrid_breakpoint(struct target *target, struct breakpoi
 		return ERROR_FAIL;
 	}
 
-	breakpoint->set = brp_1 + 1;
+	breakpoint_hw_set(breakpoint, brp_1);
 	breakpoint->linked_brp = brp_2;
 	control_ctx = ((ctx_machmode & 0x7) << 20)
 		| (brp_2 << 16)
@@ -1506,16 +1488,16 @@ static int cortex_a_unset_breakpoint(struct target *target, struct breakpoint *b
 	struct armv7a_common *armv7a = &cortex_a->armv7a_common;
 	struct cortex_a_brp *brp_list = cortex_a->brp_list;
 
-	if (!breakpoint->set) {
+	if (!breakpoint->is_set) {
 		LOG_WARNING("breakpoint not set");
 		return ERROR_OK;
 	}
 
 	if (breakpoint->type == BKPT_HARD) {
 		if ((breakpoint->address != 0) && (breakpoint->asid != 0)) {
-			int brp_i = breakpoint->set - 1;
+			int brp_i = breakpoint->number;
 			int brp_j = breakpoint->linked_brp;
-			if ((brp_i < 0) || (brp_i >= cortex_a->brp_num)) {
+			if (brp_i >= cortex_a->brp_num) {
 				LOG_DEBUG("Invalid BRP number in breakpoint");
 				return ERROR_OK;
 			}
@@ -1554,12 +1536,12 @@ static int cortex_a_unset_breakpoint(struct target *target, struct breakpoint *b
 			if (retval != ERROR_OK)
 				return retval;
 			breakpoint->linked_brp = 0;
-			breakpoint->set = 0;
+			breakpoint->is_set = false;
 			return ERROR_OK;
 
 		} else {
-			int brp_i = breakpoint->set - 1;
-			if ((brp_i < 0) || (brp_i >= cortex_a->brp_num)) {
+			int brp_i = breakpoint->number;
+			if (brp_i >= cortex_a->brp_num) {
 				LOG_DEBUG("Invalid BRP number in breakpoint");
 				return ERROR_OK;
 			}
@@ -1578,7 +1560,7 @@ static int cortex_a_unset_breakpoint(struct target *target, struct breakpoint *b
 					brp_list[brp_i].value);
 			if (retval != ERROR_OK)
 				return retval;
-			breakpoint->set = 0;
+			breakpoint->is_set = false;
 			return ERROR_OK;
 		}
 	} else {
@@ -1610,7 +1592,7 @@ static int cortex_a_unset_breakpoint(struct target *target, struct breakpoint *b
 		armv7a_l1_i_cache_inval_virt(target, breakpoint->address,
 						 breakpoint->length);
 	}
-	breakpoint->set = 0;
+	breakpoint->is_set = false;
 
 	return ERROR_OK;
 }
@@ -1676,7 +1658,7 @@ static int cortex_a_remove_breakpoint(struct target *target, struct breakpoint *
 	}
 #endif
 
-	if (breakpoint->set) {
+	if (breakpoint->is_set) {
 		cortex_a_unset_breakpoint(target, breakpoint);
 		if (breakpoint->type == BKPT_HARD)
 			cortex_a->brp_num_available++;
@@ -1709,7 +1691,7 @@ static int cortex_a_set_watchpoint(struct target *target, struct watchpoint *wat
 	struct armv7a_common *armv7a = &cortex_a->armv7a_common;
 	struct cortex_a_wrp *wrp_list = cortex_a->wrp_list;
 
-	if (watchpoint->set) {
+	if (watchpoint->is_set) {
 		LOG_WARNING("watchpoint already set");
 		return retval;
 	}
@@ -1762,7 +1744,7 @@ static int cortex_a_set_watchpoint(struct target *target, struct watchpoint *wat
 		break;
 	}
 
-	watchpoint->set = wrp_i + 1;
+	watchpoint_set(watchpoint, wrp_i);
 	control = (address_mask << 24) |
 		(byte_address_select << 5) |
 		(load_store_access_control << 3) |
@@ -1805,13 +1787,13 @@ static int cortex_a_unset_watchpoint(struct target *target, struct watchpoint *w
 	struct armv7a_common *armv7a = &cortex_a->armv7a_common;
 	struct cortex_a_wrp *wrp_list = cortex_a->wrp_list;
 
-	if (!watchpoint->set) {
+	if (!watchpoint->is_set) {
 		LOG_WARNING("watchpoint not set");
 		return ERROR_OK;
 	}
 
-	int wrp_i = watchpoint->set - 1;
-	if (wrp_i < 0 || wrp_i >= cortex_a->wrp_num) {
+	int wrp_i = watchpoint->number;
+	if (wrp_i >= cortex_a->wrp_num) {
 		LOG_DEBUG("Invalid WRP number in watchpoint");
 		return ERROR_OK;
 	}
@@ -1830,7 +1812,7 @@ static int cortex_a_unset_watchpoint(struct target *target, struct watchpoint *w
 			wrp_list[wrp_i].value);
 	if (retval != ERROR_OK)
 		return retval;
-	watchpoint->set = 0;
+	watchpoint->is_set = false;
 
 	return ERROR_OK;
 }
@@ -1872,7 +1854,7 @@ static int cortex_a_remove_watchpoint(struct target *target, struct watchpoint *
 {
 	struct cortex_a_common *cortex_a = target_to_cortex_a(target);
 
-	if (watchpoint->set) {
+	if (watchpoint->is_set) {
 		cortex_a->wrp_num_available++;
 		cortex_a_unset_watchpoint(target, watchpoint);
 	}
@@ -3024,16 +3006,30 @@ static int cortex_a_examine_first(struct target *target)
 	struct cortex_a_common *cortex_a = target_to_cortex_a(target);
 	struct armv7a_common *armv7a = &cortex_a->armv7a_common;
 	struct adiv5_dap *swjdp = armv7a->arm.dap;
+	struct adiv5_private_config *pc = target->private_config;
 
 	int i;
 	int retval = ERROR_OK;
 	uint32_t didr, cpuid, dbg_osreg, dbg_idpfr1;
 
-	/* Search for the APB-AP - it is needed for access to debug registers */
-	retval = dap_find_ap(swjdp, AP_TYPE_APB_AP, &armv7a->debug_ap);
-	if (retval != ERROR_OK) {
-		LOG_ERROR("Could not find APB-AP for debug access");
-		return retval;
+	if (armv7a->debug_ap) {
+		dap_put_ap(armv7a->debug_ap);
+		armv7a->debug_ap = NULL;
+	}
+
+	if (pc->ap_num == DP_APSEL_INVALID) {
+		/* Search for the APB-AP - it is needed for access to debug registers */
+		retval = dap_find_get_ap(swjdp, AP_TYPE_APB_AP, &armv7a->debug_ap);
+		if (retval != ERROR_OK) {
+			LOG_ERROR("Could not find APB-AP for debug access");
+			return retval;
+		}
+	} else {
+		armv7a->debug_ap = dap_get_ap(swjdp, pc->ap_num);
+		if (!armv7a->debug_ap) {
+			LOG_ERROR("Cannot get AP");
+			return ERROR_FAIL;
+		}
 	}
 
 	retval = mem_ap_init(armv7a->debug_ap);
@@ -3045,18 +3041,11 @@ static int cortex_a_examine_first(struct target *target)
 	armv7a->debug_ap->memaccess_tck = 80;
 
 	if (!target->dbgbase_set) {
-		target_addr_t dbgbase;
-		/* Get ROM Table base */
-		uint32_t apid;
-		int32_t coreidx = target->coreid;
 		LOG_DEBUG("%s's dbgbase is not set, trying to detect using the ROM table",
 			  target->cmd_name);
-		retval = dap_get_debugbase(armv7a->debug_ap, &dbgbase, &apid);
-		if (retval != ERROR_OK)
-			return retval;
-		/* Lookup 0x15 -- Processor DAP */
-		retval = dap_lookup_cs_component(armv7a->debug_ap, dbgbase, 0x15,
-				&armv7a->debug_base, &coreidx);
+		/* Lookup Processor DAP */
+		retval = dap_lookup_cs_component(armv7a->debug_ap, ARM_CS_C9_DEVTYPE_CORE_DEBUG,
+				&armv7a->debug_base, target->coreid);
 		if (retval != ERROR_OK) {
 			LOG_ERROR("Can't detect %s's dbgbase from the ROM table; you need to specify it explicitly.",
 				  target->cmd_name);
@@ -3318,6 +3307,9 @@ static void cortex_a_deinit_target(struct target *target)
 					armv7a->debug_base + CPUDBG_DSCR,
 					dscr & ~DSCR_HALT_DBG_MODE);
 	}
+
+	if (armv7a->debug_ap)
+		dap_put_ap(armv7a->debug_ap);
 
 	free(cortex_a->wrp_list);
 	free(cortex_a->brp_list);

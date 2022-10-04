@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
+
 /***************************************************************************
  *   Copyright (C) 2007 by Juergen Stuber <juergen@jstuber.net>            *
  *   based on Dominic Rath's and Benedikt Sauter's usbprog.c               *
@@ -16,19 +18,6 @@
  *                                                                         *
  *   Copyright (C) 2015-2017 by Forest Crossman                            *
  *   cyrozap@gmail.com                                                     *
- *                                                                         *
- *   This program is free software; you can redistribute it and/or modify  *
- *   it under the terms of the GNU General Public License as published by  *
- *   the Free Software Foundation; either version 2 of the License, or     *
- *   (at your option) any later version.                                   *
- *                                                                         *
- *   This program is distributed in the hope that it will be useful,       *
- *   but WITHOUT ANY WARRANTY; without even the implied warranty of        *
- *   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the         *
- *   GNU General Public License for more details.                          *
- *                                                                         *
- *   You should have received a copy of the GNU General Public License     *
- *   along with this program.  If not, see <http://www.gnu.org/licenses/>. *
  ***************************************************************************/
 
 #ifdef HAVE_CONFIG_H
@@ -114,7 +103,6 @@ struct pending_transfer_result {
 	void *buffer;
 };
 
-static char *kitprog_serial;
 static bool kitprog_init_acquire_psoc;
 
 static int pending_transfer_count, pending_queue_len;
@@ -230,7 +218,6 @@ static int kitprog_quit(void)
 	free(kitprog_handle->packet_buffer);
 	free(kitprog_handle->serial);
 	free(kitprog_handle);
-	free(kitprog_serial);
 	free(pending_transfers);
 
 	return ERROR_OK;
@@ -272,8 +259,7 @@ static int kitprog_usb_open(void)
 	const uint16_t vids[] = { VID, 0 };
 	const uint16_t pids[] = { PID, 0 };
 
-	if (jtag_libusb_open(vids, pids, kitprog_serial,
-			&kitprog_handle->usb_handle, NULL) != ERROR_OK) {
+	if (jtag_libusb_open(vids, pids, &kitprog_handle->usb_handle, NULL) != ERROR_OK) {
 		LOG_ERROR("Failed to open or find the device");
 		return ERROR_FAIL;
 	}
@@ -851,22 +837,6 @@ COMMAND_HANDLER(kitprog_handle_acquire_psoc_command)
 	return retval;
 }
 
-COMMAND_HANDLER(kitprog_handle_serial_command)
-{
-	if (CMD_ARGC == 1) {
-		kitprog_serial = strdup(CMD_ARGV[0]);
-		if (!kitprog_serial) {
-			LOG_ERROR("Failed to allocate memory for the serial number");
-			return ERROR_FAIL;
-		}
-	} else {
-		LOG_ERROR("expected exactly one argument to kitprog_serial <serial-number>");
-		return ERROR_FAIL;
-	}
-
-	return ERROR_OK;
-}
-
 COMMAND_HANDLER(kitprog_handle_init_acquire_psoc_command)
 {
 	kitprog_init_acquire_psoc = true;
@@ -899,13 +869,6 @@ static const struct command_registration kitprog_command_handlers[] = {
 		.help = "perform KitProg management",
 		.usage = "<cmd>",
 		.chain = kitprog_subcommand_handlers,
-	},
-	{
-		.name = "kitprog_serial",
-		.handler = &kitprog_handle_serial_command,
-		.mode = COMMAND_CONFIG,
-		.help = "set the serial number of the adapter",
-		.usage = "serial_string",
 	},
 	{
 		.name = "kitprog_init_acquire_psoc",

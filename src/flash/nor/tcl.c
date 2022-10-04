@@ -1,22 +1,11 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
+
 /***************************************************************************
  *   Copyright (C) 2005 by Dominic Rath <Dominic.Rath@gmx.de>              *
  *   Copyright (C) 2007,2008 Øyvind Harboe <oyvind.harboe@zylin.com>       *
  *   Copyright (C) 2008 by Spencer Oliver <spen@spen-soft.co.uk>           *
  *   Copyright (C) 2009 Zachary T Welch <zw@superlucidity.net>             *
  *   Copyright (C) 2017-2018 Tomas Vanek <vanekt@fbl.cz>                   *
- *                                                                         *
- *   This program is free software; you can redistribute it and/or modify  *
- *   it under the terms of the GNU General Public License as published by  *
- *   the Free Software Foundation; either version 2 of the License, or     *
- *   (at your option) any later version.                                   *
- *                                                                         *
- *   This program is distributed in the hope that it will be useful,       *
- *   but WITHOUT ANY WARRANTY; without even the implied warranty of        *
- *   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the         *
- *   GNU General Public License for more details.                          *
- *                                                                         *
- *   You should have received a copy of the GNU General Public License     *
- *   along with this program.  If not, see <http://www.gnu.org/licenses/>. *
  ***************************************************************************/
 #ifdef HAVE_CONFIG_H
 #include "config.h"
@@ -1527,8 +1516,7 @@ COMMAND_HANDLER(handle_flash_bank_command)
 
 	/* register flash specific commands */
 	if (driver->commands) {
-		int retval = register_commands(CMD_CTX, NULL,
-				driver->commands);
+		int retval = register_commands(CMD_CTX, NULL, driver->commands);
 		if (retval != ERROR_OK) {
 			LOG_ERROR("couldn't register '%s' commands",
 				driver_name);
@@ -1598,6 +1586,8 @@ static int jim_flash_list(Jim_Interp *interp, int argc, Jim_Obj * const *argv)
 		Jim_Obj *elem = Jim_NewListObj(interp, NULL, 0);
 
 		Jim_ListAppendElement(interp, elem, Jim_NewStringObj(interp, "name", -1));
+		Jim_ListAppendElement(interp, elem, Jim_NewStringObj(interp, p->name, -1));
+		Jim_ListAppendElement(interp, elem, Jim_NewStringObj(interp, "driver", -1));
 		Jim_ListAppendElement(interp, elem, Jim_NewStringObj(interp, p->driver->name, -1));
 		Jim_ListAppendElement(interp, elem, Jim_NewStringObj(interp, "base", -1));
 		Jim_ListAppendElement(interp, elem, Jim_NewIntObj(interp, p->base));
@@ -1607,6 +1597,8 @@ static int jim_flash_list(Jim_Interp *interp, int argc, Jim_Obj * const *argv)
 		Jim_ListAppendElement(interp, elem, Jim_NewIntObj(interp, p->bus_width));
 		Jim_ListAppendElement(interp, elem, Jim_NewStringObj(interp, "chip_width", -1));
 		Jim_ListAppendElement(interp, elem, Jim_NewIntObj(interp, p->chip_width));
+		Jim_ListAppendElement(interp, elem, Jim_NewStringObj(interp, "target", -1));
+		Jim_ListAppendElement(interp, elem, Jim_NewStringObj(interp, target_name(p->target), -1));
 
 		Jim_ListAppendElement(interp, list, elem);
 	}

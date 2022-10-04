@@ -1,18 +1,7 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
+
 /***************************************************************************
  *   Copyright (C) 2017 by Texas Instruments, Inc.                         *
- *                                                                         *
- *   This program is free software; you can redistribute it and/or modify  *
- *   it under the terms of the GNU General Public License as published by  *
- *   the Free Software Foundation; either version 2 of the License, or     *
- *   (at your option) any later version.                                   *
- *                                                                         *
- *   This program is distributed in the hope that it will be useful,       *
- *   but WITHOUT ANY WARRANTY; without even the implied warranty of        *
- *   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the         *
- *   GNU General Public License for more details.                          *
- *                                                                         *
- *   You should have received a copy of the GNU General Public License     *
- *   along with this program.  If not, see <http://www.gnu.org/licenses/>. *
  ***************************************************************************/
 
 #ifdef HAVE_CONFIG_H
@@ -140,8 +129,9 @@ static int cc26xx_init(struct flash_bank *bank)
 		return retval;
 
 	/* Check for working area to use for flash helper algorithm */
-	if (cc26xx_bank->working_area)
-		target_free_working_area(target, cc26xx_bank->working_area);
+	target_free_working_area(target, cc26xx_bank->working_area);
+	cc26xx_bank->working_area = NULL;
+
 	retval = target_alloc_working_area(target, cc26xx_bank->algo_working_size,
 				&cc26xx_bank->working_area);
 	if (retval != ERROR_OK)
@@ -158,6 +148,7 @@ static int cc26xx_init(struct flash_bank *bank)
 		LOG_ERROR("%s: Failed to load flash helper algorithm",
 			cc26xx_bank->family_name);
 		target_free_working_area(target, cc26xx_bank->working_area);
+		cc26xx_bank->working_area = NULL;
 		return retval;
 	}
 
@@ -172,6 +163,7 @@ static int cc26xx_init(struct flash_bank *bank)
 		LOG_ERROR("%s: Failed to start flash helper algorithm",
 			cc26xx_bank->family_name);
 		target_free_working_area(target, cc26xx_bank->working_area);
+		cc26xx_bank->working_area = NULL;
 		return retval;
 	}
 

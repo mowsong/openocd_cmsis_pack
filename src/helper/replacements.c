@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
+
 /***************************************************************************
  *   Copyright (C) 2006 by Dominic Rath                                    *
  *   Dominic.Rath@gmx.de                                                   *
@@ -7,19 +9,6 @@
  *                                                                         *
  *   Copyright (C) 2008 by Spencer Oliver                                  *
  *   spen@spen-soft.co.uk                                                  *
- *                                                                         *
- *   This program is free software; you can redistribute it and/or modify  *
- *   it under the terms of the GNU General Public License as published by  *
- *   the Free Software Foundation; either version 2 of the License, or     *
- *   (at your option) any later version.                                   *
- *                                                                         *
- *   This program is distributed in the hope that it will be useful,       *
- *   but WITHOUT ANY WARRANTY; without even the implied warranty of        *
- *   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the         *
- *   GNU General Public License for more details.                          *
- *                                                                         *
- *   You should have received a copy of the GNU General Public License     *
- *   along with this program.  If not, see <http://www.gnu.org/licenses/>. *
  ***************************************************************************/
 /* DANGER!!!! These must be defined *BEFORE* replacements.h and the malloc() macro!!!! */
 
@@ -273,47 +262,5 @@ int win_select(int max_fd, fd_set *rfds, fd_set *wfds, fd_set *efds, struct time
 		*efds = aexcept;
 
 	return retcode;
-}
-#endif
-
-#if defined HAVE_LIBUSB1 && !defined HAVE_LIBUSB_ERROR_NAME
-#include <libusb.h>
-/* Verbatim from git://git.libusb.org/libusb.git tag 1.0.9
- * The libusb_error enum is compatible down to v0.9.1
- */
-const char *libusb_error_name(int error_code)
-{
-	enum libusb_error error = error_code;
-	switch (error) {
-	case LIBUSB_SUCCESS:
-		return "LIBUSB_SUCCESS";
-	case LIBUSB_ERROR_IO:
-		return "LIBUSB_ERROR_IO";
-	case LIBUSB_ERROR_INVALID_PARAM:
-		return "LIBUSB_ERROR_INVALID_PARAM";
-	case LIBUSB_ERROR_ACCESS:
-		return "LIBUSB_ERROR_ACCESS";
-	case LIBUSB_ERROR_NO_DEVICE:
-		return "LIBUSB_ERROR_NO_DEVICE";
-	case LIBUSB_ERROR_NOT_FOUND:
-		return "LIBUSB_ERROR_NOT_FOUND";
-	case LIBUSB_ERROR_BUSY:
-		return "LIBUSB_ERROR_BUSY";
-	case LIBUSB_ERROR_TIMEOUT:
-		return "LIBUSB_ERROR_TIMEOUT";
-	case LIBUSB_ERROR_OVERFLOW:
-		return "LIBUSB_ERROR_OVERFLOW";
-	case LIBUSB_ERROR_PIPE:
-		return "LIBUSB_ERROR_PIPE";
-	case LIBUSB_ERROR_INTERRUPTED:
-		return "LIBUSB_ERROR_INTERRUPTED";
-	case LIBUSB_ERROR_NO_MEM:
-		return "LIBUSB_ERROR_NO_MEM";
-	case LIBUSB_ERROR_NOT_SUPPORTED:
-		return "LIBUSB_ERROR_NOT_SUPPORTED";
-	case LIBUSB_ERROR_OTHER:
-		return "LIBUSB_ERROR_OTHER";
-	}
-	return "**UNKNOWN**";
 }
 #endif

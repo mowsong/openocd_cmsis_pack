@@ -1,28 +1,20 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
+
 /***************************************************************************
  *   Copyright (C) 2009 by Zachary T Welch <zw@superlucidity.net>          *
  *                                                                         *
  *   Copyright (C) 2011 by Mauro Gamba <maurillo71@gmail.com>              *
- *                                                                         *
- *   This program is free software; you can redistribute it and/or modify  *
- *   it under the terms of the GNU General Public License as published by  *
- *   the Free Software Foundation; either version 2 of the License, or     *
- *   (at your option) any later version.                                   *
- *                                                                         *
- *   This program is distributed in the hope that it will be useful,       *
- *   but WITHOUT ANY WARRANTY; without even the implied warranty of        *
- *   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the         *
- *   GNU General Public License for more details.                          *
- *                                                                         *
- *   You should have received a copy of the GNU General Public License     *
- *   along with this program.  If not, see <http://www.gnu.org/licenses/>. *
  ***************************************************************************/
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
 #endif
-#include <jtag/drivers/jtag_usb_common.h>
+
+#include <string.h>
+
+#include <helper/log.h>
+#include <jtag/adapter.h>
 #include "libusb_helper.h"
-#include "log.h"
 
 /*
  * comment from libusb:
@@ -85,7 +77,7 @@ static bool jtag_libusb_location_equal(struct libusb_device *device)
 	}
 	dev_bus = libusb_get_bus_number(device);
 
-	return jtag_usb_location_equal(dev_bus, port_path, path_len);
+	return adapter_usb_location_equal(dev_bus, port_path, path_len);
 }
 #else /* HAVE_LIBUSB_GET_PORT_NUMBERS */
 static bool jtag_libusb_location_equal(struct libusb_device *device)
@@ -154,7 +146,6 @@ static bool jtag_libusb_match_serial(struct libusb_device_handle *device,
 }
 
 int jtag_libusb_open(const uint16_t vids[], const uint16_t pids[],
-		const char *serial,
 		struct libusb_device_handle **out,
 		adapter_get_alternate_serial_fn adapter_get_alternate_serial)
 {
@@ -162,6 +153,7 @@ int jtag_libusb_open(const uint16_t vids[], const uint16_t pids[],
 	int retval = ERROR_FAIL;
 	bool serial_mismatch = false;
 	struct libusb_device_handle *libusb_handle = NULL;
+	const char *serial = adapter_get_required_serial();
 
 	if (libusb_init(&jtag_libusb_context) < 0)
 		return ERROR_FAIL;
@@ -177,7 +169,7 @@ int jtag_libusb_open(const uint16_t vids[], const uint16_t pids[],
 		if (!jtag_libusb_match_ids(&dev_desc, vids, pids))
 			continue;
 
-		if (jtag_usb_get_location() && !jtag_libusb_location_equal(devs[idx]))
+		if (adapter_usb_get_location() && !jtag_libusb_location_equal(devs[idx]))
 			continue;
 
 		err_code = libusb_open(devs[idx], &libusb_handle);

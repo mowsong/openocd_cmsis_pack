@@ -1,5 +1,9 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+
 %C%_libtarget_la_LIBADD = %D%/openrisc/libopenrisc.la \
-	%D%/riscv/libriscv.la
+	%D%/riscv/libriscv.la \
+	%D%/xtensa/libxtensa.la \
+	%D%/espressif/libespressif.la
 
 %C%_libtarget_la_CPPFLAGS = $(AM_CPPFLAGS)
 
@@ -167,6 +171,7 @@ ARC_SRC = \
 	%D%/algorithm.h \
 	%D%/cmsis_algorithm.h \
 	%D%/arm.h \
+	%D%/arm_coresight.h \
 	%D%/arm_dpm.h \
 	%D%/arm_jtag.h \
 	%D%/arm_adi_v5.h \
@@ -261,3 +266,5 @@ ARC_SRC = \
 
 include %D%/openrisc/Makefile.am
 include %D%/riscv/Makefile.am
+include %D%/xtensa/Makefile.am
+include %D%/espressif/Makefile.am

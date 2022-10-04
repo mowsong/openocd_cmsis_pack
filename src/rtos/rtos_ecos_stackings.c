@@ -1,18 +1,4 @@
-/***************************************************************************
- *                                                                         *
- *   This program is free software; you can redistribute it and/or modify  *
- *   it under the terms of the GNU General Public License as published by  *
- *   the Free Software Foundation; either version 2 of the License, or     *
- *   (at your option) any later version.                                   *
- *                                                                         *
- *   This program is distributed in the hope that it will be useful,       *
- *   but WITHOUT ANY WARRANTY; without even the implied warranty of        *
- *   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the         *
- *   GNU General Public License for more details.                          *
- *                                                                         *
- *   You should have received a copy of the GNU General Public License     *
- *   along with this program.  If not, see <http://www.gnu.org/licenses/>. *
- ***************************************************************************/
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
@@ -43,9 +29,9 @@ static const struct stack_register_offset rtos_ecos_cortex_m3_stack_offsets[ARMV
 };
 
 const struct rtos_register_stacking rtos_ecos_cortex_m3_stacking = {
-	0x44,					/* stack_registers_size */
-	-1,						/* stack_growth_direction */
-	ARMV7M_NUM_CORE_REGS,	/* num_output_registers */
-	rtos_generic_stack_align8,	/* stack_alignment */
-	rtos_ecos_cortex_m3_stack_offsets	/* register_offsets */
+	.stack_registers_size = 0x44,
+	.stack_growth_direction = -1,
+	.num_output_registers = ARMV7M_NUM_CORE_REGS,
+	.calculate_process_stack = rtos_generic_stack_align8,
+	.register_offsets = rtos_ecos_cortex_m3_stack_offsets
 };

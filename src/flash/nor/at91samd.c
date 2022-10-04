@@ -1,19 +1,8 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
+
 /***************************************************************************
  *   Copyright (C) 2013 by Andrey Yurovsky                                 *
  *   Andrey Yurovsky <yurovsky@gmail.com>                                  *
- *                                                                         *
- *   This program is free software; you can redistribute it and/or modify  *
- *   it under the terms of the GNU General Public License as published by  *
- *   the Free Software Foundation; either version 2 of the License, or     *
- *   (at your option) any later version.                                   *
- *                                                                         *
- *   This program is distributed in the hope that it will be useful,       *
- *   but WITHOUT ANY WARRANTY; without even the implied warranty of        *
- *   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the         *
- *   GNU General Public License for more details.                          *
- *                                                                         *
- *   You should have received a copy of the GNU General Public License     *
- *   along with this program.  If not, see <http://www.gnu.org/licenses/>. *
  ***************************************************************************/
 
 #ifdef HAVE_CONFIG_H
@@ -23,6 +12,7 @@
 #include "imp.h"
 #include "helper/binarybuffer.h"
 
+#include <jtag/jtag.h>
 #include <target/cortex_m.h>
 
 #define SAMD_NUM_PROT_BLOCKS	16
@@ -250,6 +240,7 @@ static const struct samd_part saml21_parts[] = {
 
     /* SAMR34/R35 parts have integrated SAML21 with a lora radio */
 	{ 0x28, "SAMR34J18", 256, 32 },
+	{ 0x2B, "SAMR35J18", 256, 32 },
 };
 
 /* Known SAML22 parts. */
@@ -944,11 +935,6 @@ FLASH_BANK_COMMAND_HANDLER(samd_flash_bank_command)
 	return ERROR_OK;
 }
 
-COMMAND_HANDLER(samd_handle_info_command)
-{
-	return ERROR_OK;
-}
-
 COMMAND_HANDLER(samd_handle_chip_erase_command)
 {
 	struct target *target = get_current_target(CMD_CTX);
@@ -1051,31 +1037,6 @@ COMMAND_HANDLER(samd_handle_eeprom_command)
 	return res;
 }
 
-static COMMAND_HELPER(get_u64_from_hexarg, unsigned int num, uint64_t *value)
-{
-	if (num >= CMD_ARGC) {
-		command_print(CMD, "Too few Arguments.");
-		return ERROR_COMMAND_SYNTAX_ERROR;
-	}
-
-	if (strlen(CMD_ARGV[num]) >= 3 &&
-		CMD_ARGV[num][0] == '0' &&
-		CMD_ARGV[num][1] == 'x') {
-		char *check = NULL;
-		*value = strtoull(&(CMD_ARGV[num][2]), &check, 16);
-		if ((value == 0 && errno == ERANGE) ||
-			!check || *check != 0) {
-			command_print(CMD, "Invalid 64-bit hex value in argument %d.",
-				num + 1);
-			return ERROR_COMMAND_SYNTAX_ERROR;
-		}
-	} else {
-		command_print(CMD, "Argument %d needs to be a hex value.", num + 1);
-		return ERROR_COMMAND_SYNTAX_ERROR;
-	}
-	return ERROR_OK;
-}
-
 COMMAND_HANDLER(samd_handle_nvmuserrow_command)
 {
 	int res = ERROR_OK;
@@ -1102,14 +1063,12 @@ COMMAND_HANDLER(samd_handle_nvmuserrow_command)
 			mask &= NVMUSERROW_LOCKBIT_MASK;
 
 			uint64_t value;
-			res = CALL_COMMAND_HANDLER(get_u64_from_hexarg, 0, &value);
-			if (res != ERROR_OK)
-				return res;
+			COMMAND_PARSE_NUMBER(u64, CMD_ARGV[0], value);
+
 			if (CMD_ARGC == 2) {
 				uint64_t mask_temp;
-				res = CALL_COMMAND_HANDLER(get_u64_from_hexarg, 1, &mask_temp);
-				if (res != ERROR_OK)
-					return res;
+				COMMAND_PARSE_NUMBER(u64, CMD_ARGV[1], mask_temp);
+
 				mask &= mask_temp;
 			}
 			res = samd_modify_user_row_masked(target, value, mask);
@@ -1234,14 +1193,6 @@ static const struct command_registration at91samd_exec_command_handlers[] = {
 		.handler = samd_handle_reset_deassert,
 		.mode = COMMAND_EXEC,
 		.help = "Deassert internal reset held by DSU.",
-		.usage = "",
-	},
-	{
-		.name = "info",
-		.handler = samd_handle_info_command,
-		.mode = COMMAND_EXEC,
-		.help = "Print information about the current at91samd chip "
-			"and its flash configuration.",
 		.usage = "",
 	},
 	{

@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
+
 /***************************************************************************
  *   Copyright (C) 2005 by Dominic Rath                                    *
  *   Dominic.Rath@gmx.de                                                   *
@@ -17,19 +19,6 @@
  *   Copyright (C) 2019 by Tomas Vanek                                     *
  *   vanekt@fbl.cz                                                         *
  *                                                                         *
- *   This program is free software; you can redistribute it and/or modify  *
- *   it under the terms of the GNU General Public License as published by  *
- *   the Free Software Foundation; either version 2 of the License, or     *
- *   (at your option) any later version.                                   *
- *                                                                         *
- *   This program is distributed in the hope that it will be useful,       *
- *   but WITHOUT ANY WARRANTY; without even the implied warranty of        *
- *   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the         *
- *   GNU General Public License for more details.                          *
- *                                                                         *
- *   You should have received a copy of the GNU General Public License     *
- *   along with this program.  If not, see <http://www.gnu.org/licenses/>. *
- *                                                                         *
  *   ARMv7-M Architecture, Application Level Reference Manual              *
  *              ARM DDI 0405C (September 2008)                             *
  *                                                                         *
@@ -44,6 +33,8 @@
 #include "algorithm.h"
 #include "register.h"
 #include "semihosting_common.h"
+#include <helper/log.h>
+#include <helper/binarybuffer.h>
 
 #if 0
 #define _DEBUG_INSTRUCTION_EXECUTION_
@@ -249,7 +240,7 @@ static int armv7m_set_core_reg(struct reg *reg, uint8_t *buf)
 	return ERROR_OK;
 }
 
-static uint32_t armv7m_map_id_to_regsel(unsigned int arm_reg_id)
+uint32_t armv7m_map_id_to_regsel(unsigned int arm_reg_id)
 {
 	switch (arm_reg_id) {
 	case ARMV7M_R0 ... ARMV7M_R14:
@@ -287,7 +278,7 @@ static uint32_t armv7m_map_id_to_regsel(unsigned int arm_reg_id)
 	}
 }
 
-static bool armv7m_map_reg_packing(unsigned int arm_reg_id,
+bool armv7m_map_reg_packing(unsigned int arm_reg_id,
 					unsigned int *reg32_id, uint32_t *offset)
 {
 

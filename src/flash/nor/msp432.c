@@ -1,18 +1,7 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
+
 /***************************************************************************
  *   Copyright (C) 2018 by Texas Instruments, Inc.                         *
- *                                                                         *
- *   This program is free software; you can redistribute it and/or modify  *
- *   it under the terms of the GNU General Public License as published by  *
- *   the Free Software Foundation; either version 2 of the License, or     *
- *   (at your option) any later version.                                   *
- *                                                                         *
- *   This program is distributed in the hope that it will be useful,       *
- *   but WITHOUT ANY WARRANTY; without even the implied warranty of        *
- *   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the         *
- *   GNU General Public License for more details.                          *
- *                                                                         *
- *   You should have received a copy of the GNU General Public License     *
- *   along with this program.  If not, see <http://www.gnu.org/licenses/>. *
  ***************************************************************************/
 
 #ifdef HAVE_CONFIG_H
@@ -335,8 +324,9 @@ static int msp432_init(struct flash_bank *bank)
 	}
 
 	/* Check for working area to use for flash helper algorithm */
-	if (msp432_bank->working_area)
-		target_free_working_area(target, msp432_bank->working_area);
+	target_free_working_area(target, msp432_bank->working_area);
+	msp432_bank->working_area = NULL;
+
 	retval = target_alloc_working_area(target, ALGO_WORKING_SIZE,
 				&msp432_bank->working_area);
 	if (retval != ERROR_OK)

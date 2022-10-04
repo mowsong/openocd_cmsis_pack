@@ -1,22 +1,10 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
+
 /***************************************************************************
  *   Copyright (C) 2015 by David Ung                                       *
  *                                                                         *
  *   Copyright (C) 2018 by Liviu Ionescu                                   *
  *   <ilg@livius.net>                                                      *
- *                                                                         *
- *   This program is free software; you can redistribute it and/or modify  *
- *   it under the terms of the GNU General Public License as published by  *
- *   the Free Software Foundation; either version 2 of the License, or     *
- *   (at your option) any later version.                                   *
- *                                                                         *
- *   This program is distributed in the hope that it will be useful,       *
- *   but WITHOUT ANY WARRANTY; without even the implied warranty of        *
- *   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the         *
- *   GNU General Public License for more details.                          *
- *                                                                         *
- *   You should have received a copy of the GNU General Public License     *
- *   along with this program; if not, write to the                         *
- *   Free Software Foundation, Inc.,                                       *
  ***************************************************************************/
 
 #ifdef HAVE_CONFIG_H
@@ -76,6 +64,10 @@ static const struct {
 	{
 		.name = "HYP",
 		.psr = ARM_MODE_HYP,
+	},
+	{
+		.name = "UND",
+		.psr = ARM_MODE_UND,
 	},
 	{
 		.name = "SYS",
@@ -454,29 +446,31 @@ static int armv8_read_reg_simdfp_aarch32(struct armv8_common *armv8, int regnum,
 		retval = dpm->instr_read_data_r0(dpm,
 				ARMV4_5_VMOV(1, 1, 0, (num >> 4), (num & 0xf)),
 				&value_r0);
+		if (retval != ERROR_OK)
+			return retval;
 		/* read r1 via dcc */
 		retval = dpm->instr_read_data_dcc(dpm,
 				ARMV4_5_MCR(14, 0, 1, 0, 5, 0),
 				&value_r1);
-		if (retval == ERROR_OK) {
-			*lvalue = value_r1;
-			*lvalue = ((*lvalue) << 32) | value_r0;
-		} else
+		if (retval != ERROR_OK)
 			return retval;
+		*lvalue = value_r1;
+		*lvalue = ((*lvalue) << 32) | value_r0;
 
 		num++;
 		/* repeat above steps for high 64 bits of V register */
 		retval = dpm->instr_read_data_r0(dpm,
 				ARMV4_5_VMOV(1, 1, 0, (num >> 4), (num & 0xf)),
 				&value_r0);
+		if (retval != ERROR_OK)
+			return retval;
 		retval = dpm->instr_read_data_dcc(dpm,
 				ARMV4_5_MCR(14, 0, 1, 0, 5, 0),
 				&value_r1);
-		if (retval == ERROR_OK) {
-			*hvalue = value_r1;
-			*hvalue = ((*hvalue) << 32) | value_r0;
-		} else
+		if (retval != ERROR_OK)
 			return retval;
+		*hvalue = value_r1;
+		*hvalue = ((*hvalue) << 32) | value_r0;
 		break;
 	default:
 		retval = ERROR_FAIL;
@@ -586,12 +580,16 @@ static int armv8_write_reg_simdfp_aarch32(struct armv8_common *armv8, int regnum
 		retval = dpm->instr_write_data_dcc(dpm,
 			ARMV4_5_MRC(14, 0, 1, 0, 5, 0),
 			value_r1);
+		if (retval != ERROR_OK)
+			return retval;
 		/* write value_r0 to r0 via dcc then,
 		 * move to double word register from r0:r1: "vmov vm, r0, r1"
 		 */
 		retval = dpm->instr_write_data_r0(dpm,
 			ARMV4_5_VMOV(0, 1, 0, (num >> 4), (num & 0xf)),
 			value_r0);
+		if (retval != ERROR_OK)
+			return retval;
 
 		num++;
 		/* repeat above steps for high 64 bits of V register */
@@ -600,6 +598,8 @@ static int armv8_write_reg_simdfp_aarch32(struct armv8_common *armv8, int regnum
 		retval = dpm->instr_write_data_dcc(dpm,
 			ARMV4_5_MRC(14, 0, 1, 0, 5, 0),
 			value_r1);
+		if (retval != ERROR_OK)
+			return retval;
 		retval = dpm->instr_write_data_r0(dpm,
 			ARMV4_5_VMOV(0, 1, 0, (num >> 4), (num & 0xf)),
 			value_r0);

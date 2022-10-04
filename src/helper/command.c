@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
+
 /***************************************************************************
  *   Copyright (C) 2005 by Dominic Rath                                    *
  *   Dominic.Rath@gmx.de                                                   *
@@ -10,19 +12,6 @@
  *                                                                         *
  *   part of this file is taken from libcli (libcli.sourceforge.net)       *
  *   Copyright (C) David Parrish (david@dparrish.com)                      *
- *                                                                         *
- *   This program is free software; you can redistribute it and/or modify  *
- *   it under the terms of the GNU General Public License as published by  *
- *   the Free Software Foundation; either version 2 of the License, or     *
- *   (at your option) any later version.                                   *
- *                                                                         *
- *   This program is distributed in the hope that it will be useful,       *
- *   but WITHOUT ANY WARRANTY; without even the implied warranty of        *
- *   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the         *
- *   GNU General Public License for more details.                          *
- *                                                                         *
- *   You should have received a copy of the GNU General Public License     *
- *   along with this program.  If not, see <http://www.gnu.org/licenses/>. *
  ***************************************************************************/
 
 #ifdef HAVE_CONFIG_H
@@ -138,41 +127,6 @@ static void command_log_capture_finish(struct log_capture_state *state)
 
 	free(state);
 }
-
-/*
- * FIXME: workaround for memory leak in jimtcl 0.80
- * Jim API Jim_CreateCommand() converts the command name in a Jim object and
- * does not free the object. Fixed for jimtcl 0.81 by e4416cf86f0b
- * Use the internal jimtcl API Jim_CreateCommandObj, not exported by jim.h,
- * and override the bugged API through preprocessor's macro.
- * This workaround works only when jimtcl is compiled as OpenOCD submodule.
- * It's broken on macOS, so it's currently restricted on Linux only.
- * If jimtcl is linked-in from a precompiled library, either static or dynamic,
- * the symbol Jim_CreateCommandObj is not exported and the build will use the
- * bugged API.
- * To be removed when OpenOCD will switch to jimtcl 0.81
- */
-#if JIM_VERSION == 80 && defined __linux__
-static int workaround_createcommand(Jim_Interp *interp, const char *cmdName,
-	Jim_CmdProc *cmdProc, void *privData, Jim_DelCmdProc *delProc);
-int Jim_CreateCommandObj(Jim_Interp *interp, Jim_Obj *cmdNameObj,
-	Jim_CmdProc *cmdProc, void *privData, Jim_DelCmdProc *delProc)
-__attribute__((weak, alias("workaround_createcommand")));
-static int workaround_createcommand(Jim_Interp *interp, const char *cmdName,
-	Jim_CmdProc *cmdProc, void *privData, Jim_DelCmdProc *delProc)
-{
-	if ((void *)Jim_CreateCommandObj == (void *)workaround_createcommand)
-		return Jim_CreateCommand(interp, cmdName, cmdProc, privData, delProc);
-
-	Jim_Obj *cmd_name = Jim_NewStringObj(interp, cmdName, -1);
-	Jim_IncrRefCount(cmd_name);
-	int retval = Jim_CreateCommandObj(interp, cmd_name, cmdProc, privData, delProc);
-	Jim_DecrRefCount(interp, cmd_name);
-	return retval;
-}
-#define Jim_CreateCommand workaround_createcommand
-#endif /* JIM_VERSION == 80 && defined __linux__*/
-/* FIXME: end of workaround for memory leak in jimtcl 0.80 */
 
 static int command_retval_set(Jim_Interp *interp, int retval)
 {
@@ -732,16 +686,18 @@ static int jim_find(Jim_Interp *interp, int argc, Jim_Obj *const *argv)
 	return JIM_OK;
 }
 
-COMMAND_HANDLER(jim_echo)
+COMMAND_HANDLER(handle_echo)
 {
 	if (CMD_ARGC == 2 && !strcmp(CMD_ARGV[0], "-n")) {
 		LOG_USER_N("%s", CMD_ARGV[1]);
-		return JIM_OK;
+		return ERROR_OK;
 	}
+
 	if (CMD_ARGC != 1)
-		return JIM_ERR;
+		return ERROR_FAIL;
+
 	LOG_USER("%s", CMD_ARGV[0]);
-	return JIM_OK;
+	return ERROR_OK;
 }
 
 /* Capture progress output and return as tcl return value. If the
@@ -977,8 +933,6 @@ static int exec_command(Jim_Interp *interp, struct command_context *cmd_ctx,
 
 static int jim_command_dispatch(Jim_Interp *interp, int argc, Jim_Obj * const *argv)
 {
-	script_debug(interp, argc, argv);
-
 	/* check subcommands */
 	if (argc > 1) {
 		char *s = alloc_printf("%s %s", Jim_GetString(argv[0], NULL), Jim_GetString(argv[1], NULL));
@@ -993,6 +947,8 @@ static int jim_command_dispatch(Jim_Interp *interp, int argc, Jim_Obj * const *a
 		}
 		Jim_DecrRefCount(interp, js);
 	}
+
+	script_debug(interp, argc, argv);
 
 	struct command *c = jim_to_command(interp);
 	if (!c->jim_handler && !c->handler) {
@@ -1201,6 +1157,7 @@ COMMAND_HANDLER(handle_sleep_command)
 		int64_t then = timeval_ms();
 		while (timeval_ms() - then < (int64_t)duration) {
 			target_call_timer_callbacks_now();
+			keep_alive();
 			usleep(1000);
 		}
 	} else
@@ -1242,7 +1199,7 @@ static const struct command_registration command_builtin_handlers[] = {
 	},
 	{
 		.name = "echo",
-		.handler = jim_echo,
+		.handler = handle_echo,
 		.mode = COMMAND_ANY,
 		.help = "Logs a message at \"user\" priority. "
 			"Option \"-n\" suppresses trailing newline",

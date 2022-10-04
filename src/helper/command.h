@@ -1,22 +1,11 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
+
 /***************************************************************************
  *   Copyright (C) 2005 by Dominic Rath                                    *
  *   Dominic.Rath@gmx.de                                                   *
  *                                                                         *
  *   Copyright (C) 2007,2008 Øyvind Harboe                                 *
  *   oyvind.harboe@zylin.com                                               *
- *                                                                         *
- *   This program is free software; you can redistribute it and/or modify  *
- *   it under the terms of the GNU General Public License as published by  *
- *   the Free Software Foundation; either version 2 of the License, or     *
- *   (at your option) any later version.                                   *
- *                                                                         *
- *   This program is distributed in the hope that it will be useful,       *
- *   but WITHOUT ANY WARRANTY; without even the implied warranty of        *
- *   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the         *
- *   GNU General Public License for more details.                          *
- *                                                                         *
- *   You should have received a copy of the GNU General Public License     *
- *   along with this program.  If not, see <http://www.gnu.org/licenses/>. *
  ***************************************************************************/
 
 #ifndef OPENOCD_HELPER_COMMAND_H
@@ -24,8 +13,8 @@
 
 #include <stdint.h>
 #include <stdbool.h>
-#include <jim-nvp.h>
 
+#include <helper/jim-nvp.h>
 #include <helper/list.h>
 #include <helper/types.h>
 
@@ -38,6 +27,15 @@
 #define PRINTF_ATTRIBUTE_FORMAT printf
 #endif
 
+/**
+ * OpenOCD command mode is COMMAND_CONFIG at start, then switches to COMMAND_EXEC
+ * during the execution of command 'init'.
+ * The field 'mode' in struct command_registration specifies in which command mode
+ * the command can be executed:
+ * - during COMMAND_CONFIG only,
+ * - during COMMAND_EXEC only,
+ * - in both modes (COMMAND_ANY).
+ */
 enum command_mode {
 	COMMAND_EXEC,
 	COMMAND_CONFIG,

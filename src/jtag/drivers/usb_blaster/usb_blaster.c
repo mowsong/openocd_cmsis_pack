@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
+
 /*
  *   Driver for USB-JTAG, Altera USB-Blaster and compatibles
  *
@@ -9,19 +11,6 @@
  *   Copyright (C) 2011 Ali Lown ali@lown.me.uk
  *   Copyright (C) 2009 Catalin Patulea cat@vv.carleton.ca
  *   Copyright (C) 2006 Kolja Waschk usbjtag@ixo.de
- *
- *   This program is free software; you can redistribute it and/or modify
- *   it under the terms of the GNU General Public License as published by
- *   the Free Software Foundation; either version 2 of the License, or
- *   (at your option) any later version.
- *
- *   This program is distributed in the hope that it will be useful,
- *   but WITHOUT ANY WARRANTY; without even the implied warranty of
- *   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- *   GNU General Public License for more details.
- *
- *   You should have received a copy of the GNU General Public License
- *   along with this program.  If not, see <http://www.gnu.org/licenses/>.
  *
  */
 
@@ -119,7 +108,6 @@ struct ublast_info {
 
 	char *lowlevel_name;
 	struct ublast_lowlevel *drv;
-	char *ublast_device_desc;
 	uint16_t ublast_vid, ublast_pid;
 	uint16_t ublast_vid_uninit, ublast_pid_uninit;
 	int flags;
@@ -140,7 +128,7 @@ static struct ublast_info info = {
 };
 
 /*
- * Available lowlevel drivers (FTDI, FTD2xx, ...)
+ * Available lowlevel drivers (FTDI, libusb, ...)
  */
 struct drvs_map {
 	char *name;
@@ -874,7 +862,6 @@ static int ublast_init(void)
 	info.drv->ublast_pid = info.ublast_pid;
 	info.drv->ublast_vid_uninit = info.ublast_vid_uninit;
 	info.drv->ublast_pid_uninit = info.ublast_pid_uninit;
-	info.drv->ublast_device_desc = info.ublast_device_desc;
 	info.drv->firmware_path = info.firmware_path;
 
 	info.flags |= info.drv->flags;
@@ -906,16 +893,6 @@ static int ublast_quit(void)
 
 	ublast_buf_write(&byte0, 1, &retlen);
 	return info.drv->close(info.drv);
-}
-
-COMMAND_HANDLER(ublast_handle_device_desc_command)
-{
-	if (CMD_ARGC != 1)
-		return ERROR_COMMAND_SYNTAX_ERROR;
-
-	info.ublast_device_desc = strdup(CMD_ARGV[0]);
-
-	return ERROR_OK;
 }
 
 COMMAND_HANDLER(ublast_handle_vid_pid_command)
@@ -1031,13 +1008,6 @@ COMMAND_HANDLER(ublast_firmware_command)
 
 
 static const struct command_registration ublast_subcommand_handlers[] = {
-	{
-		.name = "device_desc",
-		.handler = ublast_handle_device_desc_command,
-		.mode = COMMAND_CONFIG,
-		.help = "set the USB device description of the USB-Blaster",
-		.usage = "description-string",
-	},
 	{
 		.name = "vid_pid",
 		.handler = ublast_handle_vid_pid_command,

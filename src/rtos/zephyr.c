@@ -1,11 +1,11 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
+
 /***************************************************************************
  *   Copyright (C) 2017 by Intel Corporation
  *   Leandro Pereira <leandro.pereira@intel.com>
  *   Daniel Glöckner <dg@emlix.com>*
  *   Copyright (C) 2021 by Synopsys, Inc.
  *   Evgeniy Didin <didin@synopsys.com>
- *                                                                         *
- *   SPDX-License-Identifier: GPL-2.0-or-later                             *
  ***************************************************************************/
 
 #ifdef HAVE_CONFIG_H
@@ -189,9 +189,9 @@ enum zephyr_symbol_values {
 	ZEPHYR_VAL_COUNT
 };
 
-static int64_t zephyr_cortex_m_stack_align(struct target *target,
+static target_addr_t zephyr_cortex_m_stack_align(struct target *target,
 		const uint8_t *stack_data,
-		const struct rtos_register_stacking *stacking, int64_t stack_ptr)
+		const struct rtos_register_stacking *stacking, target_addr_t stack_ptr)
 {
 	return rtos_cortex_m_stack_align(target, stack_data, stacking,
 			stack_ptr, ARM_XPSR_OFFSET);
@@ -375,15 +375,15 @@ static const struct symbol_table_elem zephyr_symbol_list[] = {
 		.optional = false
 	},
 	{
-		.symbol_name = "_kernel_openocd_offsets",
+		.symbol_name = "_kernel_thread_info_offsets",
 		.optional = false
 	},
 	{
-		.symbol_name = "_kernel_openocd_size_t_size",
+		.symbol_name = "_kernel_thread_info_size_t_size",
 		.optional = false
 	},
 	{
-		.symbol_name = "_kernel_openocd_num_offsets",
+		.symbol_name = "_kernel_thread_info_num_offsets",
 		.optional = true
 	},
 	{

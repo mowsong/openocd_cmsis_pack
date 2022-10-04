@@ -1,18 +1,7 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
+
 /**************************************************************************
 *   Copyright (C) 2015 Jeff Ciesielski <jeffciesielski@gmail.com>         *
-*                                                                         *
-*   This program is free software; you can redistribute it and/or modify  *
-*   it under the terms of the GNU General Public License as published by  *
-*   the Free Software Foundation; either version 2 of the License, or     *
-*   (at your option) any later version.                                   *
-*                                                                         *
-*   This program is distributed in the hope that it will be useful,       *
-*   but WITHOUT ANY WARRANTY; without even the implied warranty of        *
-*   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the         *
-*   GNU General Public License for more details.                          *
-*                                                                         *
-*   You should have received a copy of the GNU General Public License     *
-*   along with this program.  If not, see <http://www.gnu.org/licenses/>. *
 ***************************************************************************/
 
 #ifdef HAVE_CONFIG_H
@@ -1268,12 +1257,12 @@ COMMAND_HANDLER(xmc4xxx_handle_flash_password_command)
 	errno = 0;
 
 	/* We skip over the flash bank */
-	fb->pw1 = strtol(CMD_ARGV[1], NULL, 16);
+	COMMAND_PARSE_NUMBER(u32, CMD_ARGV[1], fb->pw1);
 
 	if (errno)
 		return ERROR_COMMAND_SYNTAX_ERROR;
 
-	fb->pw2 = strtol(CMD_ARGV[2], NULL, 16);
+	COMMAND_PARSE_NUMBER(u32, CMD_ARGV[2], fb->pw2);
 
 	if (errno)
 		return ERROR_COMMAND_SYNTAX_ERROR;
